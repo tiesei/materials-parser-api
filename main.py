@@ -455,25 +455,29 @@ def get_products():
 
 class ProductsUpdateRequest(BaseModel):
     products: list
+    headers: list = []
 
 
 @app.post("/products")
 def save_products(req: ProductsUpdateRequest):
-    """Save all products back to Google Sheets."""
+    """Save all products + headers back to Google Sheets."""
     try:
         service = get_sheets_service()
         sheet = service.spreadsheets()
 
-        # Read current headers from row 1
-        result = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range="Products!A1:Z1"
-        ).execute()
-        header_row = result.get("values", [[]])[0]
-        if not header_row:
-            raise HTTPException(status_code=400, detail="No headers in Products sheet")
+        # Use headers from request if provided, else read from sheet
+        if req.headers:
+            header_row = req.headers
+        else:
+            result = sheet.values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Products!A1:Z1"
+            ).execute()
+            header_row = result.get("values", [[]])[0]
+            if not header_row:
+                raise HTTPException(status_code=400, detail="No headers in Products sheet")
 
-        # Build rows from products list
+        # Build rows
         rows = [header_row]
         for product in req.products:
             row = [str(product.get(h, "")) for h in header_row]
