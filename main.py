@@ -1,706 +1,503 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Materials</title>
-<style>
-  @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap');
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import requests
+from bs4 import BeautifulSoup
+import re
+import os
+import json
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
-  :root {
-    --bg: #f0ede8;
-    --surface: #faf9f7;
-    --border: #ddd9d3;
-    --text: #1a1a18;
-    --text-muted: #888880;
-    --accent: #2d5a3d;
-    --accent-light: #e8f0eb;
-    --in-stock: #2d5a3d;
-    --in-stock-bg: #e8f0eb;
-    --out: #8b3a2a;
-    --out-bg: #f5ebe8;
-    --sold: #7a5c1a;
-    --sold-bg: #f5f0e0;
-    --mono: 'DM Mono', monospace;
-    --sans: 'DM Sans', sans-serif;
-  }
+app = FastAPI()
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-  body {
-    font-family: var(--sans);
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-  }
-
-  /* NAV */
-  nav {
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    padding: 0 1.5rem;
-    display: flex;
-    align-items: center;
-    gap: 2rem;
-    height: 48px;
-    position: sticky;
-    top: 0;
-    z-index: 100;
-  }
-
-  .nav-brand {
-    font-family: var(--mono);
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text);
-    letter-spacing: 0.05em;
-    text-decoration: none;
-  }
-
-  .nav-links { display: flex; gap: 0; }
-
-  .nav-links a {
-    font-size: 13px;
-    color: var(--text-muted);
-    text-decoration: none;
-    padding: 0 1rem;
-    height: 48px;
-    display: flex;
-    align-items: center;
-    border-bottom: 2px solid transparent;
-    transition: color 0.15s, border-color 0.15s;
-  }
-
-  .nav-links a:hover { color: var(--text); }
-  .nav-links a.active { color: var(--text); border-bottom-color: var(--accent); }
-
-  .nav-end { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
-
-  /* MAIN */
-  main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
-
-  /* ADD BAR */
-  .add-bar {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1rem 1.25rem;
-    display: flex;
-    gap: 0.75rem;
-    align-items: center;
-    margin-bottom: 1.25rem;
-  }
-
-  .add-bar input {
-    flex: 1;
-    font-family: var(--mono);
-    font-size: 13px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.5rem 0.75rem;
-    color: var(--text);
-    outline: none;
-    transition: border-color 0.15s;
-  }
-
-  .add-bar input:focus { border-color: var(--accent); }
-  .add-bar input::placeholder { color: var(--text-muted); }
-
-  .btn {
-    font-family: var(--sans);
-    font-size: 13px;
-    font-weight: 500;
-    padding: 0.5rem 1.1rem;
-    border-radius: 6px;
-    border: none;
-    cursor: pointer;
-    transition: opacity 0.15s, transform 0.1s;
-    white-space: nowrap;
-  }
-
-  .btn:active { transform: scale(0.97); }
-  .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
-
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover:not(:disabled) { opacity: 0.88; }
-
-  .btn-ghost {
-    background: transparent;
-    color: var(--text-muted);
-    border: 1px solid var(--border);
-  }
-  .btn-ghost:hover:not(:disabled) { background: var(--bg); color: var(--text); }
-
-  /* STATUS */
-  .status-bar {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--text-muted);
-    padding: 0.4rem 0;
-    margin-bottom: 0.75rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    min-height: 24px;
-  }
-
-  .status-bar.loading { color: var(--accent); }
-  .status-bar.error { color: var(--out); }
-
-  .spinner {
-    width: 12px; height: 12px;
-    border: 1.5px solid currentColor;
-    border-top-color: transparent;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    display: inline-block;
-  }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* TABLE WRAPPER */
-  .table-wrap {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-  }
-
-  thead { background: var(--bg); }
-
-  th {
-    font-family: var(--mono);
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-muted);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    padding: 0.6rem 0.75rem;
-    text-align: left;
-    border-bottom: 1px solid var(--border);
-    white-space: nowrap;
-  }
-
-  td {
-    padding: 0.65rem 0.75rem;
-    border-bottom: 1px solid var(--border);
-    vertical-align: middle;
-    font-size: 13px;
-  }
-
-  tr:last-child td { border-bottom: none; }
-  tr:hover td { background: #f5f3ef; }
-
-  /* THUMBNAIL */
-  .thumb-cell { width: 80px; }
-
-  .thumb {
-    width: 72px;
-    height: 72px;
-    object-fit: cover;
-    border-radius: 6px;
-    display: block;
-    cursor: zoom-in;
-    transition: transform 0.2s, box-shadow 0.2s;
-    background: var(--bg);
-  }
-
-  .thumb:hover {
-    transform: scale(1.05);
-    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-  }
-
-  .thumb.expanded {
-    width: 260px;
-    height: 260px;
-    cursor: zoom-out;
-    position: relative;
-    z-index: 10;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.18);
-  }
-
-  /* TYPE BADGE */
-  .type-badge {
-    font-family: var(--mono);
-    font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 0.05em;
-    padding: 2px 7px;
-    border-radius: 4px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    color: var(--text-muted);
-    white-space: nowrap;
-  }
-
-  /* TITLE */
-  .title-cell { min-width: 160px; max-width: 200px; }
-  .title-text { font-weight: 500; font-size: 13px; line-height: 1.4; }
-  .title-link {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--accent);
-    text-decoration: none;
-    display: inline-block;
-    margin-top: 3px;
-    opacity: 0.7;
-  }
-  .title-link:hover { opacity: 1; text-decoration: underline; }
-
-  /* DESC */
-  .desc-cell { min-width: 160px; max-width: 220px; color: var(--text-muted); font-size: 12px; line-height: 1.5; }
-
-  /* NOTES */
-  .notes-cell { width: 150px; }
-  textarea.notes {
-    font-family: var(--sans);
-    font-size: 12px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 5px 7px;
-    width: 140px;
-    height: 52px;
-    resize: none;
-    color: var(--text);
-    outline: none;
-    transition: border-color 0.15s;
-    line-height: 1.4;
-  }
-  textarea.notes:focus { border-color: var(--accent); }
-
-  /* COLORS */
-  .colors-cell { width: 150px; }
-
-  .color-select-wrap { position: relative; }
-
-  select.color-select {
-    font-family: var(--sans);
-    font-size: 12px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 4px 6px;
-    width: 140px;
-    color: var(--text);
-    outline: none;
-    cursor: pointer;
-    appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888880' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 8px center;
-    padding-right: 24px;
-  }
-
-  select.color-select:focus { border-color: var(--accent); }
-
-  select.options-select {
-    font-family: var(--sans);
-    font-size: 12px;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    padding: 4px 6px;
-    width: 140px;
-    color: var(--text);
-    outline: none;
-    cursor: pointer;
-    appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888880' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 8px center;
-    padding-right: 24px;
-    margin-top: 4px;
-  }
-
-  /* WEIGHT / PRICE */
-  .mono-cell {
-    font-family: var(--mono);
-    font-size: 12px;
-    white-space: nowrap;
-    color: var(--text);
-  }
-
-  /* AVAILABILITY */
-  .badge {
-    display: inline-block;
-    font-size: 11px;
-    font-weight: 500;
-    padding: 2px 8px;
-    border-radius: 10px;
-    white-space: nowrap;
-  }
-  .badge.in  { background: var(--in-stock-bg); color: var(--in-stock); }
-  .badge.out { background: var(--out-bg); color: var(--out); }
-  .badge.sold{ background: var(--sold-bg); color: var(--sold); }
-  .badge.check{ background: var(--bg); color: var(--text-muted); border: 1px solid var(--border); }
-
-  /* REPARSE BTN */
-  .reparse-btn {
-    font-size: 14px;
-    background: none;
-    border: 1px solid var(--border);
-    border-radius: 5px;
-    width: 28px;
-    height: 28px;
-    cursor: pointer;
-    color: var(--text-muted);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: color 0.15s, border-color 0.15s, transform 0.2s;
-  }
-
-  .reparse-btn:hover { color: var(--accent); border-color: var(--accent); }
-  .reparse-btn.spinning { animation: spin 0.8s linear infinite; }
-
-  /* EMPTY STATE */
-  .empty-state {
-    text-align: center;
-    padding: 4rem 2rem;
-    color: var(--text-muted);
-  }
-
-  .empty-state p { font-size: 14px; margin-top: 0.5rem; }
-
-  /* LOADING SKELETON */
-  .skeleton {
-    background: linear-gradient(90deg, var(--bg) 25%, var(--border) 50%, var(--bg) 75%);
-    background-size: 200% 100%;
-    animation: shimmer 1.2s infinite;
-    border-radius: 4px;
-    height: 14px;
-  }
-
-  @keyframes shimmer { to { background-position: -200% 0; } }
-
-  /* MOBILE */
-  @media (max-width: 768px) {
-    main { padding: 1rem; }
-    .add-bar { flex-wrap: wrap; }
-    .add-bar input { min-width: 0; }
-    .desc-cell { display: none; }
-    .thumb { width: 56px; height: 56px; }
-  }
-</style>
-</head>
-<body>
-
-<nav>
-  <span class="nav-brand">⬡ atelier</span>
-  <div class="nav-links">
-    <a href="index.html" class="active">Materials</a>
-    <a href="products.html">Products</a>
-    <a href="calculator.html">Calculator</a>
-  </div>
-  <div class="nav-end">
-    <button class="btn btn-ghost" id="loginBtn" onclick="handleLogin()" style="font-size:12px;padding:4px 10px;">sign in</button>
-  </div>
-</nav>
-
-<main>
-  <div class="add-bar">
-    <input type="url" id="urlInput" placeholder="Paste product URL from extremtextil.de or adventurexpert.com…" />
-    <button class="btn btn-primary" id="addBtn" onclick="addMaterial()">Add material</button>
-  </div>
-
-  <div class="status-bar" id="statusBar"></div>
-
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Type</th>
-          <th class="thumb-cell">Photo</th>
-          <th class="title-cell">Title</th>
-          <th class="desc-cell">Description</th>
-          <th class="notes-cell">Notes</th>
-          <th class="colors-cell">Colors / Options</th>
-          <th>Weight</th>
-          <th>Price</th>
-          <th>Stock</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="tbody">
-        <tr>
-          <td colspan="10">
-            <div class="empty-state">
-              <div style="font-size:32px;margin-bottom:8px;">⬡</div>
-              <p>No materials yet — paste a URL above to add one.</p>
-            </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</main>
-
-<script>
-const API = "https://materials-parser-api.onrender.com";
-
-// ── STATUS ────────────────────────────────────────────────────────────────────
-function setStatus(msg, type = "") {
-  const bar = document.getElementById("statusBar");
-  bar.className = "status-bar" + (type ? " " + type : "");
-  bar.innerHTML = type === "loading"
-    ? `<span class="spinner"></span> ${msg}`
-    : msg;
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 }
 
-function clearStatus() {
-  document.getElementById("statusBar").innerHTML = "";
-  document.getElementById("statusBar").className = "status-bar";
-}
+ALLOWED_DOMAINS = ["extremtextil.de", "adventurexpert.com"]
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
-// ── AVAILABILITY BADGE ────────────────────────────────────────────────────────
-function badge(av) {
-  if (!av) return `<span class="badge check">—</span>`;
-  const l = av.toLowerCase();
-  if (l.includes("in stock"))  return `<span class="badge in">In stock</span>`;
-  if (l.includes("sold"))      return `<span class="badge sold">Sold out</span>`;
-  if (l.includes("out"))       return `<span class="badge out">Out of stock</span>`;
-  return `<span class="badge check">${av}</span>`;
-}
 
-// ── RENDER ROW ────────────────────────────────────────────────────────────────
-function renderRow(item, idx) {
-  const colors = Array.isArray(item.colors) ? item.colors : [];
-  const variants = Array.isArray(item.variants) ? item.variants : [];
-  const firstImg = colors[0]?.image || "";
-  const firstUrl = colors[0]?.url || item.url || "#";
-  const savedNote = localStorage.getItem("note_" + (item.url || idx)) || "";
+def get_sheets_service():
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS", "")
+    if not creds_json:
+        raise HTTPException(status_code=500, detail="Google credentials not configured")
+    creds_dict = json.loads(creds_json)
+    creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    return build("sheets", "v4", credentials=creds)
 
-  const tr = document.createElement("tr");
-  tr.dataset.url = item.url || "";
 
-  // TYPE
-  const tdType = document.createElement("td");
-  tdType.innerHTML = `<span class="type-badge">${item.type || "—"}</span>`;
+def save_to_sheets(data: dict):
+    # Column order: type, title, description, notes(D), colors, variants, weight, price, availability, url(J)
+    HEADERS = ["type", "title", "description", "notes", "colors", "variants", "weight", "price", "availability", "url"]
 
-  // PHOTO
-  const tdPhoto = document.createElement("td");
-  tdPhoto.className = "thumb-cell";
-  const img = document.createElement("img");
-  img.className = "thumb";
-  img.src = firstImg;
-  img.alt = item.title || "";
-  img.loading = "lazy";
-  img.onclick = () => img.classList.toggle("expanded");
-  tdPhoto.appendChild(img);
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
 
-  // TITLE
-  const tdTitle = document.createElement("td");
-  tdTitle.className = "title-cell";
-  tdTitle.innerHTML = `
-    <div class="title-text">${item.title || "—"}</div>
-    ${item.url ? `<a class="title-link" href="${item.url}" target="_blank">↗ open</a>` : ""}
-  `;
+        colors_json = json.dumps(data.get("colors", []), ensure_ascii=False)
+        variants_json = json.dumps(data.get("variants", []), ensure_ascii=False)
 
-  // DESC
-  const tdDesc = document.createElement("td");
-  tdDesc.className = "desc-cell";
-  const desc = item.description || "";
-  tdDesc.textContent = desc.length > 100 ? desc.slice(0, 100) + "…" : desc;
+        row_data = [
+            data.get("type", ""),
+            data.get("title", ""),
+            data.get("description", ""),
+            "",  # notes — col D, user fills manually
+            colors_json,
+            variants_json,
+            data.get("weight", ""),
+            data.get("price", ""),
+            data.get("availability", ""),
+            data.get("url", ""),
+        ]
 
-  // NOTES
-  const tdNotes = document.createElement("td");
-  tdNotes.className = "notes-cell";
-  const ta = document.createElement("textarea");
-  ta.className = "notes";
-  ta.placeholder = "Add note…";
-  ta.value = savedNote;
-  ta.oninput = () => localStorage.setItem("note_" + (item.url || idx), ta.value);
-  tdNotes.appendChild(ta);
+        # URL is in column J — check if it already exists
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Materials!J:J"
+        ).execute()
+        existing_urls = result.get("values", [])
 
-  // COLORS + OPTIONS
-  const tdColors = document.createElement("td");
-  tdColors.className = "colors-cell";
+        row_index = None
+        for i, row in enumerate(existing_urls):
+            if row and row[0] == data["url"]:
+                row_index = i + 1
+                break
 
-  if (colors.length > 0) {
-    const colorSel = document.createElement("select");
-    colorSel.className = "color-select";
-    colors.forEach((c, i) => {
-      const opt = document.createElement("option");
-      opt.value = i;
-      opt.textContent = c.name || `Color ${i+1}`;
-      colorSel.appendChild(opt);
-    });
+        if row_index:
+            # Update cols A-C (skip notes in D), then E-J
+            sheet.values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"Materials!A{row_index}:C{row_index}",
+                valueInputOption="RAW",
+                body={"values": [row_data[:3]]}
+            ).execute()
+            sheet.values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"Materials!E{row_index}:J{row_index}",
+                valueInputOption="RAW",
+                body={"values": [row_data[4:]]}
+            ).execute()
+        else:
+            # Add header if sheet is empty
+            if not existing_urls:
+                sheet.values().update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range="Materials!A1",
+                    valueInputOption="RAW",
+                    body={"values": [HEADERS]}
+                ).execute()
 
-    colorSel.onchange = () => {
-      const c = colors[parseInt(colorSel.value)];
-      if (c?.image) img.src = c.image;
-    };
+            sheet.values().append(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Materials!A:J",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": [row_data]}
+            ).execute()
 
-    tdColors.appendChild(colorSel);
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
 
-    // Options dropdown (variants from adventurexpert or multi-size items)
-    if (variants.length > 0 && variants[0].options?.length > 0) {
-      const optSel = document.createElement("select");
-      optSel.className = "options-select";
-      variants[0].options.forEach(o => {
-        const opt = document.createElement("option");
-        opt.value = o;
-        opt.textContent = o;
-        optSel.appendChild(opt);
-      });
-      tdColors.appendChild(optSel);
-    }
-  } else {
-    tdColors.innerHTML = `<span style="color:var(--text-muted);font-size:12px;">—</span>`;
-  }
 
-  // WEIGHT
-  const tdWeight = document.createElement("td");
-  tdWeight.className = "mono-cell";
-  tdWeight.textContent = item.weight || "—";
+class ParseRequest(BaseModel):
+    url: str
 
-  // PRICE
-  const tdPrice = document.createElement("td");
-  tdPrice.className = "mono-cell";
-  tdPrice.textContent = item.price || "—";
 
-  // STOCK
-  const tdStock = document.createElement("td");
-  tdStock.innerHTML = badge(item.availability);
+def guess_type(title):
+    t = title.lower()
+    if "webbing" in t or "strap" in t or "ribbon" in t:
+        return "Webbing"
+    if "zipper" in t or "zip" in t or "slider" in t or "closure" in t:
+        return "Zipper"
+    if "buckle" in t or "hardware" in t or "clip" in t or "hook" in t:
+        return "Hardware"
+    if "lining" in t or "liner" in t or "taffeta" in t or "mesh" in t:
+        return "Lining"
+    if ("laminate" in t or "backpack" in t or "ecopak" in t
+            or "ultra-tx" in t or "ultratx" in t or "dyneema" in t
+            or "dcf" in t or "composite" in t or "ripstop" in t
+            or "polyester" in t or "nylon" in t or "cordura" in t
+            or "fabric" in t or "canvas" in t or "silpoly" in t
+            or "silnylon" in t or "cuben" in t):
+        return "Outer fabric"
+    if "fleece" in t or "insul" in t or "primaloft" in t or "climashield" in t:
+        return "Insulation"
+    if "cord" in t or "rope" in t or "braid" in t:
+        return "Cord"
+    return "Fabric"
 
-  // REPARSE
-  const tdAction = document.createElement("td");
-  const repBtn = document.createElement("button");
-  repBtn.className = "reparse-btn";
-  repBtn.title = "Refresh";
-  repBtn.textContent = "↻";
-  repBtn.onclick = () => reparseMaterial(item.url, tr, repBtn);
-  tdAction.appendChild(repBtn);
 
-  tr.appendChild(tdType);
-  tr.appendChild(tdPhoto);
-  tr.appendChild(tdTitle);
-  tr.appendChild(tdDesc);
-  tr.appendChild(tdNotes);
-  tr.appendChild(tdColors);
-  tr.appendChild(tdWeight);
-  tr.appendChild(tdPrice);
-  tr.appendChild(tdStock);
-  tr.appendChild(tdAction);
+# ── EXTREMTEXTIL ──────────────────────────────────────────────────────────────
 
-  return tr;
-}
+def clean_color_extremtextil(raw):
+    raw = re.sub(r'\d+[,\.]\d+\s*EUR', '', raw)
+    raw = re.sub(r'Deliverable.*', '', raw)
+    raw = re.sub(r'Out of stock.*', '', raw)
+    raw = re.sub(r'In stock.*', '', raw)
+    raw = re.sub(r'Sold out.*', '', raw)
+    raw = re.sub(r'Available.*', '', raw)
+    return raw.strip()
 
-// ── LOAD MATERIALS ────────────────────────────────────────────────────────────
-async function loadMaterials() {
-  setStatus("Loading…", "loading");
-  try {
-    const res = await fetch(`${API}/materials`);
-    const data = await res.json();
-    renderTable(data);
-    clearStatus();
-  } catch(e) {
-    setStatus("Failed to load materials. API may be waking up — try again in 30s.", "error");
-  }
-}
 
-function renderTable(data) {
-  const tbody = document.getElementById("tbody");
-  tbody.innerHTML = "";
+def get_extremtextil_image(url):
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=10)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        skip = ["footer", "project", "efre", "logo", "newsletter", "planer", "planner"]
+        for img in soup.find_all("img"):
+            src = img.get("src", "")
+            if "cstatic" in src and not any(s in src.lower() for s in skip):
+                return src.split("?")[0]
+    except Exception:
+        pass
+    return ""
 
-  if (!data || data.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="10">
-      <div class="empty-state">
-        <div style="font-size:32px;margin-bottom:8px;">⬡</div>
-        <p>No materials yet — paste a URL above to add one.</p>
-      </div>
-    </td></tr>`;
-    return;
-  }
 
-  data.forEach((item, idx) => {
-    tbody.appendChild(renderRow(item, idx));
-  });
-}
+def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
+    artikul = url.split("/")[-1]
+    basis = artikul.split(".")[0]
+    base = "https://www.extremtextil.de"
 
-// ── ADD MATERIAL ──────────────────────────────────────────────────────────────
-async function addMaterial() {
-  const input = document.getElementById("urlInput");
-  const url = input.value.trim();
-  if (!url) return;
+    title_tag = soup.title
+    title = title_tag.text.strip().replace(" | extremtextil", "") if title_tag else url
 
-  const btn = document.getElementById("addBtn");
-  btn.disabled = true;
-  setStatus("Parsing… this may take 1–2 minutes for products with many colors.", "loading");
+    skip_words = [
+        "Further links", "VAT", "prices", "cancellation",
+        "Technical", "Informations", "unable", "orders",
+        "enquiries", "May", "January", "February", "March",
+        "April", "June", "July", "August", "September",
+        "October", "November", "December"
+    ]
 
-  try {
-    const res = await fetch(`${API}/parse`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url })
-    });
+    desc = ""
+    for p in soup.find_all("p"):
+        t = p.text.strip()
+        if (30 < len(t) < 400
+                and not any(w in t for w in skip_words)
+                and "shipping" not in t.lower()
+                and basis not in t
+                and not re.search(r'\d+g/(m|sqm|qm)', t)):
+            desc = t
+            break
 
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || "Parse failed");
+    weight = ""
+    price = ""
+    availability = "Check website"
+
+    for tag in soup.find_all("div"):
+        t = tag.text.strip()
+        if not weight and re.search(r'Weight', t) and re.search(r'\d+[,\.]?\d*\s*g/', t) and len(t) < 60:
+            match = re.search(r'\d+[,\.]?\d*\s*g/\S+', t)
+            if match:
+                weight = match.group()
+
+    for tag in soup.find_all(["span", "div", "p"]):
+        t = tag.text.strip()
+        if not price and re.search(r'\d+[,\.]\d+\s*EUR', t) and len(t) < 30:
+            price = re.search(r'\d+[,\.]\d+\s*EUR', t).group()
+        if availability == "Check website":
+            if "Sold out" in t and len(t) < 100:
+                availability = "Sold out"
+            elif "In stock" in t and len(t) < 50:
+                availability = "In stock"
+            elif "Out of stock" in t and len(t) < 50:
+                availability = "Out of stock"
+
+    colors_raw = []
+    seen = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if basis in href and "/en/" in href:
+            name = clean_color_extremtextil(a.text)
+            if name and name not in seen:
+                seen.append(name)
+                full = base + href if href.startswith("/") else href
+                colors_raw.append({"name": name, "url": full})
+
+    colors_raw = [c for c in colors_raw if not any(w in c["name"] for w in ["sqm", "g/m", "mm", "®"])]
+
+    colors = []
+    for c in colors_raw:
+        img = get_extremtextil_image(c["url"])
+        colors.append({"name": c["name"], "url": c["url"], "image": img})
+
+    return {
+        "url": url,
+        "source": "extremtextil.de",
+        "type": guess_type(title),
+        "title": title,
+        "price": price,
+        "weight": weight,
+        "availability": availability,
+        "description": desc,
+        "colors": colors,
+        "variants": [],
     }
 
-    const data = await res.json();
-    input.value = "";
 
-    // Reload full table to get updated order from Sheets
-    await loadMaterials();
-    setStatus(`✓ Added: ${data.title}`, "");
-    setTimeout(clearStatus, 3000);
+# ── ADVENTUREXPERT ────────────────────────────────────────────────────────────
 
-  } catch(e) {
-    setStatus(`Error: ${e.message}`, "error");
-  } finally {
-    btn.disabled = false;
-  }
-}
+def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
+    title_tag = soup.title
+    title = title_tag.text.strip().replace(" - Adventurexpert", "").replace(" – Adventurexpert", "") if title_tag else url
 
-// ── REPARSE ───────────────────────────────────────────────────────────────────
-async function reparseMaterial(url, tr, btn) {
-  if (!url) return;
-  btn.classList.add("spinning");
-  btn.disabled = true;
-  setStatus("Refreshing…", "loading");
+    price = ""
+    price_tag = soup.find("p", class_="price")
+    if not price_tag:
+        price_tag = soup.find("span", class_="woocommerce-Price-amount")
+    if price_tag:
+        price_text = price_tag.get_text(strip=True)
+        match = re.search(r'[\d,\.]+\s*€', price_text)
+        if match:
+            price = match.group().replace("\xa0", "").strip()
 
-  try {
-    const res = await fetch(`${API}/parse`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url })
-    });
+    desc = ""
+    desc_div = soup.find("div", class_="woocommerce-product-details__short-description")
+    if not desc_div:
+        desc_div = soup.find("div", id="tab-description")
+    if desc_div:
+        for p in desc_div.find_all("p"):
+            t = p.get_text(strip=True)
+            if 10 < len(t) < 400:
+                desc = t
+                break
 
-    if (!res.ok) throw new Error("Reparse failed");
-    await loadMaterials();
-    setStatus("✓ Refreshed", "");
-    setTimeout(clearStatus, 2000);
-  } catch(e) {
-    setStatus(`Error: ${e.message}`, "error");
-    btn.classList.remove("spinning");
-    btn.disabled = false;
-  }
-}
+    weight = ""
+    full_text = soup.get_text()
+    weight_match = re.search(r'Weight[:\s]+(\d+[\d,\.]*\s*g(?:/\S+)?)', full_text)
+    if weight_match:
+        weight = weight_match.group(1).strip()
 
-// ── LOGIN (placeholder for Google OAuth) ──────────────────────────────────────
-function handleLogin() {
-  // TODO: implement Google OAuth
-  alert("Google login coming soon");
-}
+    availability = "Check website"
+    stock_tag = soup.find("p", class_="stock")
+    if stock_tag:
+        t = stock_tag.get_text(strip=True).lower()
+        if "out of stock" in t:
+            availability = "Out of stock"
+        elif "in stock" in t:
+            availability = "In stock"
+    else:
+        if soup.find("button", class_="single_add_to_cart_button"):
+            availability = "In stock"
 
-// ── ENTER KEY ─────────────────────────────────────────────────────────────────
-document.getElementById("urlInput").addEventListener("keydown", e => {
-  if (e.key === "Enter") addMaterial();
-});
+    variants = []
+    for select in soup.find_all("select", attrs={"name": re.compile(r"attribute_")}):
+        label_tag = select.find_previous("label")
+        attr_name = (
+            label_tag.get_text(strip=True) if label_tag
+            else select.get("name", "").replace("attribute_pa_", "").replace("attribute_", "").capitalize()
+        )
+        options = []
+        for opt in select.find_all("option"):
+            val = opt.get_text(strip=True)
+            if val and val.lower() not in ["choose an option", "select"]:
+                options.append(val)
+        if options:
+            variants.append({"attribute": attr_name, "options": options})
 
-// ── INIT ──────────────────────────────────────────────────────────────────────
-loadMaterials();
-</script>
-</body>
-</html>
+    images = []
+    gallery = soup.find("div", class_="woocommerce-product-gallery")
+    if gallery:
+        for a in gallery.find_all("a", href=True):
+            href = a["href"]
+            if re.search(r'\.(jpg|jpeg|png|webp)', href, re.I):
+                if href not in images:
+                    images.append(href)
+    if not images:
+        og = soup.find("meta", property="og:image")
+        if og and og.get("content"):
+            images.append(og["content"])
+
+    colors = []
+    if variants:
+        first_attr = variants[0]
+        for i, opt in enumerate(first_attr["options"]):
+            img = images[i] if i < len(images) else (images[0] if images else "")
+            colors.append({
+                "name": opt,
+                "url": url,
+                "image": img,
+                "attribute": first_attr["attribute"]
+            })
+    else:
+        colors.append({
+            "name": "Default",
+            "url": url,
+            "image": images[0] if images else ""
+        })
+
+    return {
+        "url": url,
+        "source": "adventurexpert.com",
+        "type": guess_type(title),
+        "title": title,
+        "price": price,
+        "weight": weight,
+        "availability": availability,
+        "description": desc,
+        "colors": colors,
+        "variants": variants,
+    }
+
+
+# ── ROUTER ────────────────────────────────────────────────────────────────────
+
+def parse_page(url: str) -> dict:
+    if not any(domain in url for domain in ALLOWED_DOMAINS):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Supported sites: {', '.join(ALLOWED_DOMAINS)}"
+        )
+
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {e}")
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    if "extremtextil.de" in url:
+        return parse_extremtextil(url, soup)
+    elif "adventurexpert.com" in url:
+        return parse_adventurexpert(url, soup)
+
+
+# ── ENDPOINTS ─────────────────────────────────────────────────────────────────
+
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Materials parser API", "supported": ALLOWED_DOMAINS}
+
+
+@app.post("/parse")
+def parse(req: ParseRequest):
+    """Parse and save to Google Sheets. Works for add and reparse."""
+    data = parse_page(req.url)
+    save_to_sheets(data)
+    return data
+
+
+@app.get("/materials")
+def get_materials():
+    """Read all materials from Google Sheets."""
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Materials!A:K"
+        ).execute()
+        rows = result.get("values", [])
+        if len(rows) < 2:
+            return []
+        headers = rows[0]
+        materials = []
+        for row in rows[1:]:
+            # Pad row to header length
+            while len(row) < len(headers):
+                row.append("")
+            item = dict(zip(headers, row))
+            # Parse JSON fields
+            try:
+                item["colors"] = json.loads(item.get("colors", "[]"))
+            except Exception:
+                item["colors"] = []
+            try:
+                item["variants"] = json.loads(item.get("variants", "[]"))
+            except Exception:
+                item["variants"] = []
+            materials.append(item)
+        return materials
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+@app.get("/products")
+def get_products():
+    """Read all products from Google Sheets. Headers are dynamic — any columns work."""
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Products!A:Z"
+        ).execute()
+        rows = result.get("values", [])
+        if len(rows) < 2:
+            return {"headers": [], "products": []}
+        headers = rows[0]
+        products = []
+        for row in rows[1:]:
+            while len(row) < len(headers):
+                row.append("")
+            products.append(dict(zip(headers, row)))
+        return {"headers": headers, "products": products}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+class ProductsUpdateRequest(BaseModel):
+    products: list
+    headers: list = []
+
+
+@app.post("/products")
+def save_products(req: ProductsUpdateRequest):
+    """Save all products + headers back to Google Sheets."""
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+
+        # Use headers from request if provided, else read from sheet
+        if req.headers:
+            header_row = req.headers
+        else:
+            result = sheet.values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Products!A1:Z1"
+            ).execute()
+            header_row = result.get("values", [[]])[0]
+            if not header_row:
+                raise HTTPException(status_code=400, detail="No headers in Products sheet")
+
+        # Build rows
+        rows = [header_row]
+        for product in req.products:
+            row = [str(product.get(h, "")) for h in header_row]
+            rows.append(row)
+
+        # Clear and rewrite
+        sheet.values().clear(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Products!A:Z"
+        ).execute()
+
+        sheet.values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Products!A1",
+            valueInputOption="RAW",
+            body={"values": rows}
+        ).execute()
+
+        return {"status": "ok", "saved": len(req.products)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
