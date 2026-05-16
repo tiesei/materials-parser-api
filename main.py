@@ -425,3 +425,29 @@ def get_materials():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+@app.get("/products")
+def get_products():
+    """Read all products from Google Sheets. Headers are dynamic — any columns work."""
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Products!A:Z"
+        ).execute()
+        rows = result.get("values", [])
+        if len(rows) < 2:
+            return {"headers": [], "products": []}
+        headers = rows[0]
+        products = []
+        for row in rows[1:]:
+            while len(row) < len(headers):
+                row.append("")
+            products.append(dict(zip(headers, row)))
+        return {"headers": headers, "products": products}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
