@@ -451,3 +451,49 @@ def get_products():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+class ProductsUpdateRequest(BaseModel):
+    products: list
+
+
+@app.post("/products")
+def save_products(req: ProductsUpdateRequest):
+    """Save all products back to Google Sheets."""
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+
+        # Read current headers from row 1
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Products!A1:Z1"
+        ).execute()
+        header_row = result.get("values", [[]])[0]
+        if not header_row:
+            raise HTTPException(status_code=400, detail="No headers in Products sheet")
+
+        # Build rows from products list
+        rows = [header_row]
+        for product in req.products:
+            row = [str(product.get(h, "")) for h in header_row]
+            rows.append(row)
+
+        # Clear and rewrite
+        sheet.values().clear(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Products!A:Z"
+        ).execute()
+
+        sheet.values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Products!A1",
+            valueInputOption="RAW",
+            body={"values": rows}
+        ).execute()
+
+        return {"status": "ok", "saved": len(req.products)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
