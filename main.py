@@ -4,6 +4,10 @@ from pydantic import BaseModel
 import requests
 from bs4 import BeautifulSoup
 import re
+import os
+import json
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 
 app = FastAPI()
 
@@ -19,6 +23,90 @@ HEADERS = {
 }
 
 ALLOWED_DOMAINS = ["extremtextil.de", "adventurexpert.com"]
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+
+
+def get_sheets_service():
+    creds_json = os.environ.get("GOOGLE_CREDENTIALS", "")
+    if not creds_json:
+        raise HTTPException(status_code=500, detail="Google credentials not configured")
+    creds_dict = json.loads(creds_json)
+    creds = service_account.Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
+    return build("sheets", "v4", credentials=creds)
+
+
+def save_to_sheets(data: dict):
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+
+        # Read existing rows to check if URL already exists
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Materials!A:A"
+        ).execute()
+        existing = result.get("values", [])
+
+        # Find row index by URL (column A)
+        row_index = None
+        for i, row in enumerate(existing):
+            if row and row[0] == data["url"]:
+                row_index = i + 1  # 1-based
+                break
+
+        # Serialize colors and variants as JSON strings
+        colors_json = json.dumps(data.get("colors", []), ensure_ascii=False)
+        variants_json = json.dumps(data.get("variants", []), ensure_ascii=False)
+
+        row_data = [
+            data.get("url", ""),
+            data.get("source", ""),
+            data.get("type", ""),
+            data.get("title", ""),
+            data.get("price", ""),
+            data.get("weight", ""),
+            data.get("availability", ""),
+            data.get("description", ""),
+            colors_json,
+            variants_json,
+            "",  # notes — empty, user fills manually
+        ]
+
+        if row_index:
+            # Update existing row (keep notes in column K)
+            range_no_notes = f"Materials!A{row_index}:J{row_index}"
+            sheet.values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=range_no_notes,
+                valueInputOption="RAW",
+                body={"values": [row_data[:10]]}
+            ).execute()
+        else:
+            # Add header row if sheet is empty
+            if not existing:
+                headers = [["url", "source", "type", "title", "price", "weight",
+                            "availability", "description", "colors", "variants", "notes"]]
+                sheet.values().update(
+                    spreadsheetId=SPREADSHEET_ID,
+                    range="Materials!A1",
+                    valueInputOption="RAW",
+                    body={"values": headers}
+                ).execute()
+
+            # Append new row
+            sheet.values().append(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Materials!A:K",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": [row_data]}
+            ).execute()
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
 
 
 class ParseRequest(BaseModel):
@@ -153,6 +241,7 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
         "availability": availability,
         "description": desc,
         "colors": colors,
+        "variants": [],
     }
 
 
@@ -162,7 +251,6 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
     title_tag = soup.title
     title = title_tag.text.strip().replace(" - Adventurexpert", "").replace(" – Adventurexpert", "") if title_tag else url
 
-    # Price — WooCommerce <p class="price"> or <span class="woocommerce-Price-amount">
     price = ""
     price_tag = soup.find("p", class_="price")
     if not price_tag:
@@ -173,7 +261,6 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
         if match:
             price = match.group().replace("\xa0", "").strip()
 
-    # Description
     desc = ""
     desc_div = soup.find("div", class_="woocommerce-product-details__short-description")
     if not desc_div:
@@ -185,14 +272,12 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
                 desc = t
                 break
 
-    # Weight — search in full page text
     weight = ""
     full_text = soup.get_text()
     weight_match = re.search(r'Weight[:\s]+(\d+[\d,\.]*\s*g(?:/\S+)?)', full_text)
     if weight_match:
         weight = weight_match.group(1).strip()
 
-    # Availability — WooCommerce stock status
     availability = "Check website"
     stock_tag = soup.find("p", class_="stock")
     if stock_tag:
@@ -202,11 +287,9 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
         elif "in stock" in t:
             availability = "In stock"
     else:
-        # Add to basket button present = in stock
         if soup.find("button", class_="single_add_to_cart_button"):
             availability = "In stock"
 
-    # Variants (WooCommerce select options — sizes, types, etc.)
     variants = []
     for select in soup.find_all("select", attrs={"name": re.compile(r"attribute_")}):
         label_tag = select.find_previous("label")
@@ -222,7 +305,6 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
         if options:
             variants.append({"attribute": attr_name, "options": options})
 
-    # Images — WooCommerce product gallery
     images = []
     gallery = soup.find("div", class_="woocommerce-product-gallery")
     if gallery:
@@ -231,14 +313,11 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
             if re.search(r'\.(jpg|jpeg|png|webp)', href, re.I):
                 if href not in images:
                     images.append(href)
-    # Fallback: og:image
     if not images:
         og = soup.find("meta", property="og:image")
         if og and og.get("content"):
             images.append(og["content"])
 
-    # Map to colors[] for frontend compatibility
-    # Variants → one entry per option; no variants → one default entry
     colors = []
     if variants:
         first_attr = variants[0]
@@ -268,7 +347,6 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
         "description": desc,
         "colors": colors,
         "variants": variants,
-        "images": images,
     }
 
 
@@ -304,8 +382,44 @@ def root():
 
 @app.post("/parse")
 def parse(req: ParseRequest):
-    """
-    Parse a product page from extremtextil.de or adventurexpert.com.
-    Works for both adding new items and refreshing existing ones.
-    """
-    return parse_page(req.url)
+    """Parse and save to Google Sheets. Works for add and reparse."""
+    data = parse_page(req.url)
+    save_to_sheets(data)
+    return data
+
+
+@app.get("/materials")
+def get_materials():
+    """Read all materials from Google Sheets."""
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Materials!A:K"
+        ).execute()
+        rows = result.get("values", [])
+        if len(rows) < 2:
+            return []
+        headers = rows[0]
+        materials = []
+        for row in rows[1:]:
+            # Pad row to header length
+            while len(row) < len(headers):
+                row.append("")
+            item = dict(zip(headers, row))
+            # Parse JSON fields
+            try:
+                item["colors"] = json.loads(item.get("colors", "[]"))
+            except Exception:
+                item["colors"] = []
+            try:
+                item["variants"] = json.loads(item.get("variants", "[]"))
+            except Exception:
+                item["variants"] = []
+            materials.append(item)
+        return materials
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
