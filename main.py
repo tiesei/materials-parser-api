@@ -131,7 +131,7 @@ def guess_type(title):
             or "polyester" in t or "nylon" in t or "cordura" in t
             or "fabric" in t or "canvas" in t or "silpoly" in t
             or "silnylon" in t or "cuben" in t):
-        return "Outer fabric"
+        return "Outer"
     if "fleece" in t or "insul" in t or "primaloft" in t or "climashield" in t:
         return "Insulation"
     if "cord" in t or "rope" in t or "braid" in t:
