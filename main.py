@@ -37,67 +37,69 @@ def get_sheets_service():
 
 
 def save_to_sheets(data: dict):
+    # Column order: type, title, description, notes(D), colors, variants, weight, price, availability, url(J)
+    HEADERS = ["type", "title", "description", "notes", "colors", "variants", "weight", "price", "availability", "url"]
+
     try:
         service = get_sheets_service()
         sheet = service.spreadsheets()
 
-        # Read existing rows to check if URL already exists
-        result = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range="Materials!A:A"
-        ).execute()
-        existing = result.get("values", [])
-
-        # Find row index by URL (column A)
-        row_index = None
-        for i, row in enumerate(existing):
-            if row and row[0] == data["url"]:
-                row_index = i + 1  # 1-based
-                break
-
-        # Serialize colors and variants as JSON strings
         colors_json = json.dumps(data.get("colors", []), ensure_ascii=False)
         variants_json = json.dumps(data.get("variants", []), ensure_ascii=False)
 
         row_data = [
-            data.get("url", ""),
-            data.get("source", ""),
             data.get("type", ""),
             data.get("title", ""),
-            data.get("price", ""),
-            data.get("weight", ""),
-            data.get("availability", ""),
             data.get("description", ""),
+            "",  # notes — col D, user fills manually
             colors_json,
             variants_json,
-            "",  # notes — empty, user fills manually
+            data.get("weight", ""),
+            data.get("price", ""),
+            data.get("availability", ""),
+            data.get("url", ""),
         ]
 
+        # URL is in column J — check if it already exists
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Materials!J:J"
+        ).execute()
+        existing_urls = result.get("values", [])
+
+        row_index = None
+        for i, row in enumerate(existing_urls):
+            if row and row[0] == data["url"]:
+                row_index = i + 1
+                break
+
         if row_index:
-            # Update existing row (keep notes in column K)
-            range_no_notes = f"Materials!A{row_index}:J{row_index}"
+            # Update cols A-C (skip notes in D), then E-J
             sheet.values().update(
                 spreadsheetId=SPREADSHEET_ID,
-                range=range_no_notes,
+                range=f"Materials!A{row_index}:C{row_index}",
                 valueInputOption="RAW",
-                body={"values": [row_data[:10]]}
+                body={"values": [row_data[:3]]}
+            ).execute()
+            sheet.values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"Materials!E{row_index}:J{row_index}",
+                valueInputOption="RAW",
+                body={"values": [row_data[4:]]}
             ).execute()
         else:
-            # Add header row if sheet is empty
-            if not existing:
-                headers = [["url", "source", "type", "title", "price", "weight",
-                            "availability", "description", "colors", "variants", "notes"]]
+            # Add header if sheet is empty
+            if not existing_urls:
                 sheet.values().update(
                     spreadsheetId=SPREADSHEET_ID,
                     range="Materials!A1",
                     valueInputOption="RAW",
-                    body={"values": headers}
+                    body={"values": [HEADERS]}
                 ).execute()
 
-            # Append new row
             sheet.values().append(
                 spreadsheetId=SPREADSHEET_ID,
-                range="Materials!A:K",
+                range="Materials!A:J",
                 valueInputOption="RAW",
                 insertDataOption="INSERT_ROWS",
                 body={"values": [row_data]}
