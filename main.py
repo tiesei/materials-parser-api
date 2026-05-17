@@ -41,6 +41,15 @@ SW_HEADERS = {
 _en_language_id = None
 
 
+class ParseRequest(BaseModel):
+    url: str
+
+
+class ProductsUpdateRequest(BaseModel):
+    products: list
+    headers: list = []
+
+
 # ── GOOGLE SHEETS ─────────────────────────────────────────────────────────────
 
 def get_sheets_service():
@@ -194,8 +203,10 @@ def fetch_all_colors_via_api(basis: str) -> list:
 
         # Fallback: metaTitle "... in COLOR | extremtextil"
         if not color_name:
-            meta_title = ((el.get("translated") or {}).get("metaTitle")
-                          or el.get("metaTitle") or "")
+            meta_title = (
+                (el.get("translated") or {}).get("metaTitle")
+                or el.get("metaTitle") or ""
+            )
             if " in " in meta_title:
                 color_name = meta_title.split(" in ")[-1].replace(" | extremtextil", "").strip()
 
@@ -212,7 +223,7 @@ def fetch_all_colors_via_api(basis: str) -> list:
         # Availability
         availability = "In stock" if (el.get("availableStock") or 0) > 0 else "Out of stock"
 
-        # Price
+        # Price per variant
         unit_price = (el.get("calculatedPrice") or {}).get("unitPrice") or 0
 
         colors.append({
@@ -229,7 +240,7 @@ def fetch_all_colors_via_api(basis: str) -> list:
 def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
     basis = url.split("/")[-1].split(".")[0]
 
-    title = (soup.title.text.strip().replace(" | extremtextil", "") if soup.title else url)
+    title = soup.title.text.strip().replace(" | extremtextil", "") if soup.title else url
 
     skip_words = [
         "Further links", "VAT", "prices", "cancellation", "Technical",
@@ -254,4 +265,251 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
         if not weight and "Weight" in t and len(t) < 60:
             m = re.search(r'\d+[,\.]?\d*\s*g/\S+', t)
             if m:
-                we
+                weight = m.group()
+                break
+
+    price = ""
+    for tag in soup.find_all(["span", "div", "p"]):
+        t = tag.text.strip()
+        if not price and len(t) < 30:
+            m = re.search(r'\d+[,\.]\d+\s*EUR', t)
+            if m:
+                price = m.group()
+                break
+
+    colors = fetch_all_colors_via_api(basis)
+
+    if colors and not price and colors[0].get("price_per_unit"):
+        price = f"{colors[0]['price_per_unit']:.2f} EUR".replace(".", ",")
+
+    return {
+        "url": url,
+        "source": "extremtextil.de",
+        "type": guess_type(title),
+        "title": title,
+        "price": price,
+        "weight": weight,
+        "description": desc,
+        "colors": colors,
+        "variants": [],
+    }
+
+
+# ── ADVENTUREXPERT ────────────────────────────────────────────────────────────
+
+def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
+    title = (soup.title.text.strip()
+             .replace(" - Adventurexpert", "")
+             .replace(" – Adventurexpert", "")
+             if soup.title else url)
+
+    price = ""
+    price_tag = soup.find("p", class_="price") or soup.find("span", class_="woocommerce-Price-amount")
+    if price_tag:
+        m = re.search(r'[\d,\.]+\s*€', price_tag.get_text(strip=True))
+        if m:
+            price = m.group().replace("\xa0", "").strip()
+
+    desc = ""
+    desc_div = (soup.find("div", class_="woocommerce-product-details__short-description")
+                or soup.find("div", id="tab-description"))
+    if desc_div:
+        for p in desc_div.find_all("p"):
+            t = p.get_text(strip=True)
+            if 10 < len(t) < 400:
+                desc = t
+                break
+
+    weight = ""
+    m = re.search(r'Weight[:\s]+(\d+[\d,\.]*\s*g(?:/\S+)?)', soup.get_text())
+    if m:
+        weight = m.group(1).strip()
+
+    availability = "Check website"
+    stock_tag = soup.find("p", class_="stock")
+    if stock_tag:
+        t = stock_tag.get_text(strip=True).lower()
+        availability = "Out of stock" if "out of stock" in t else "In stock"
+    elif soup.find("button", class_="single_add_to_cart_button"):
+        availability = "In stock"
+
+    variants = []
+    for select in soup.find_all("select", attrs={"name": re.compile(r"attribute_")}):
+        label_tag = select.find_previous("label")
+        attr_name = (
+            label_tag.get_text(strip=True) if label_tag
+            else select.get("name", "")
+                .replace("attribute_pa_", "")
+                .replace("attribute_", "")
+                .capitalize()
+        )
+        options = [
+            opt.get_text(strip=True) for opt in select.find_all("option")
+            if opt.get_text(strip=True).lower() not in ["choose an option", "select"]
+        ]
+        if options:
+            variants.append({"attribute": attr_name, "options": options})
+
+    images = []
+    gallery = soup.find("div", class_="woocommerce-product-gallery")
+    if gallery:
+        for a in gallery.find_all("a", href=True):
+            if re.search(r'\.(jpg|jpeg|png|webp)', a["href"], re.I) and a["href"] not in images:
+                images.append(a["href"])
+    if not images:
+        og = soup.find("meta", property="og:image")
+        if og and og.get("content"):
+            images.append(og["content"])
+
+    if variants:
+        colors = [
+            {
+                "name": opt,
+                "url": url,
+                "image": images[i] if i < len(images) else (images[0] if images else ""),
+                "attribute": variants[0]["attribute"],
+            }
+            for i, opt in enumerate(variants[0]["options"])
+        ]
+    else:
+        colors = [{"name": "Default", "url": url, "image": images[0] if images else ""}]
+
+    return {
+        "url": url,
+        "source": "adventurexpert.com",
+        "type": guess_type(title),
+        "title": title,
+        "price": price,
+        "weight": weight,
+        "availability": availability,
+        "description": desc,
+        "colors": colors,
+        "variants": variants,
+    }
+
+
+# ── ROUTER ────────────────────────────────────────────────────────────────────
+
+def parse_page(url: str) -> dict:
+    if not any(domain in url for domain in ALLOWED_DOMAINS):
+        raise HTTPException(status_code=400, detail=f"Supported sites: {', '.join(ALLOWED_DOMAINS)}")
+    try:
+        resp = requests.get(url, headers=FETCH_HEADERS, timeout=15)
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {e}")
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    if "extremtextil.de" in url:
+        return parse_extremtextil(url, soup)
+    elif "adventurexpert.com" in url:
+        return parse_adventurexpert(url, soup)
+
+
+# ── ENDPOINTS ─────────────────────────────────────────────────────────────────
+
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Materials parser API", "supported": ALLOWED_DOMAINS}
+
+
+@app.post("/parse")
+def parse(req: ParseRequest):
+    data = parse_page(req.url)
+    save_to_sheets(data)
+    return data
+
+
+@app.get("/materials")
+def get_materials():
+    try:
+        service = get_sheets_service()
+        result = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Materials!A:I"
+        ).execute()
+        rows = result.get("values", [])
+        if len(rows) < 2:
+            return []
+        headers = rows[0]
+        materials = []
+        for row in rows[1:]:
+            while len(row) < len(headers):
+                row.append("")
+            item = dict(zip(headers, row))
+            for field in ["colors", "variants"]:
+                try:
+                    item[field] = json.loads(item.get(field, "[]"))
+                except Exception:
+                    item[field] = []
+            materials.append(item)
+        return materials
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+@app.get("/products")
+def get_products():
+    try:
+        service = get_sheets_service()
+        result = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Products!A:Z"
+        ).execute()
+        rows = result.get("values", [])
+        if len(rows) < 2:
+            return {"headers": [], "products": []}
+        headers = rows[0]
+        products = []
+        for row in rows[1:]:
+            while len(row) < len(headers):
+                row.append("")
+            products.append(dict(zip(headers, row)))
+        return {"headers": headers, "products": products}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+@app.post("/products")
+def save_products(req: ProductsUpdateRequest):
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+
+        if req.headers:
+            header_row = req.headers
+        else:
+            result = sheet.values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Products!A1:Z1"
+            ).execute()
+            header_row = result.get("values", [[]])[0]
+            if not header_row:
+                raise HTTPException(status_code=400, detail="No headers in Products sheet")
+
+        rows = [header_row] + [
+            [str(product.get(h, "")) for h in header_row]
+            for product in req.products
+        ]
+
+        sheet.values().clear(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Products!A:Z"
+        ).execute()
+        sheet.values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Products!A1",
+            valueInputOption="RAW",
+            body={"values": rows}
+        ).execute()
+
+        return {"status": "ok", "saved": len(req.products)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
