@@ -551,3 +551,39 @@ def update_type(req: UpdateTypeRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+class UpdateNoteRequest(BaseModel):
+    url: str
+    note: str
+
+
+@app.post("/update-note")
+def update_note(req: UpdateNoteRequest):
+    """Update note (col D) for a material by URL."""
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Materials!I:I"
+        ).execute()
+        existing_urls = result.get("values", [])
+        row_index = None
+        for i, row in enumerate(existing_urls):
+            if row and row[0] == req.url:
+                row_index = i + 1
+                break
+        if not row_index:
+            raise HTTPException(status_code=404, detail="Material not found")
+        sheet.values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"Materials!D{row_index}",
+            valueInputOption="RAW",
+            body={"values": [[req.note]]}
+        ).execute()
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
