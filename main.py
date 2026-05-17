@@ -515,3 +515,39 @@ def save_products(req: ProductsUpdateRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+class UpdateTypeRequest(BaseModel):
+    url: str
+    type: str
+
+
+@app.post("/update-type")
+def update_type(req: UpdateTypeRequest):
+    """Update type (col A) for a material by URL."""
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Materials!I:I"
+        ).execute()
+        existing_urls = result.get("values", [])
+        row_index = None
+        for i, row in enumerate(existing_urls):
+            if row and row[0] == req.url:
+                row_index = i + 1
+                break
+        if not row_index:
+            raise HTTPException(status_code=404, detail="Material not found")
+        sheet.values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f"Materials!A{row_index}",
+            valueInputOption="RAW",
+            body={"values": [[req.type]]}
+        ).execute()
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
