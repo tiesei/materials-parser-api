@@ -38,7 +38,7 @@ def get_sheets_service():
 
 def save_to_sheets(data: dict):
     # Column order: type, title, description, notes(D), colors, variants, weight, price, availability, url(J)
-    HEADERS = ["type", "title", "description", "notes", "colors", "variants", "weight", "price", "availability", "url"]
+    HEADERS = ["type", "title", "description", "notes", "colors", "variants", "weight", "price", "url"]
 
     try:
         service = get_sheets_service()
@@ -56,14 +56,13 @@ def save_to_sheets(data: dict):
             variants_json,
             data.get("weight", ""),
             data.get("price", ""),
-            data.get("availability", ""),
             data.get("url", ""),
         ]
 
-        # URL is in column J — check if it already exists
+        # URL is in column I — check if it already exists
         result = sheet.values().get(
             spreadsheetId=SPREADSHEET_ID,
-            range="Materials!J:J"
+            range="Materials!I:I"
         ).execute()
         existing_urls = result.get("values", [])
 
@@ -83,7 +82,7 @@ def save_to_sheets(data: dict):
             ).execute()
             sheet.values().update(
                 spreadsheetId=SPREADSHEET_ID,
-                range=f"Materials!E{row_index}:J{row_index}",
+                range=f"Materials!E{row_index}:I{row_index}",
                 valueInputOption="RAW",
                 body={"values": [row_data[4:]]}
             ).execute()
@@ -99,7 +98,7 @@ def save_to_sheets(data: dict):
 
             sheet.values().append(
                 spreadsheetId=SPREADSHEET_ID,
-                range="Materials!A:J",
+                range="Materials!A:I",
                 valueInputOption="RAW",
                 insertDataOption="INSERT_ROWS",
                 body={"values": [row_data]}
@@ -117,52 +116,61 @@ class ParseRequest(BaseModel):
 
 def guess_type(title):
     t = title.lower()
-    if "webbing" in t or "strap" in t or "ribbon" in t:
-        return "Webbing"
-    if "zipper" in t or "zip" in t or "slider" in t or "closure" in t:
+    if ("zipper" in t or "zip" in t or "slider" in t or "closure" in t
+            or "vislon" in t or "aquaguard" in t or "coil" in t):
         return "Zipper"
-    if "buckle" in t or "hardware" in t or "clip" in t or "hook" in t:
-        return "Hardware"
-    if "lining" in t or "liner" in t or "taffeta" in t or "mesh" in t:
-        return "Lining"
-    if ("laminate" in t or "backpack" in t or "ecopak" in t
-            or "ultra-tx" in t or "ultratx" in t or "dyneema" in t
-            or "dcf" in t or "composite" in t or "ripstop" in t
-            or "polyester" in t or "nylon" in t or "cordura" in t
-            or "fabric" in t or "canvas" in t or "silpoly" in t
-            or "silnylon" in t or "cuben" in t):
-        return "Outer"
-    if "fleece" in t or "insul" in t or "primaloft" in t or "climashield" in t:
-        return "Insulation"
-    if "cord" in t or "rope" in t or "braid" in t:
-        return "Cord"
+    if ("webbing" in t or "strap" in t or "ribbon" in t
+            or "binding" in t or "edge" in t or "tape" in t):
+        return "Webbing"
+    if ("buckle" in t or "hardware" in t or "clip" in t or "hook" in t
+            or "snap" in t or "toggle" in t or "loop" in t or "ring" in t
+            or "cord lock" in t or "stopper" in t or "puller" in t):
+        return "Furniture"
+    if "foam" in t or "evazote" in t or "eva " in t or "padding" in t:
+        return "Foam"
     return "Fabric"
 
 
 # ── EXTREMTEXTIL ──────────────────────────────────────────────────────────────
 
-def clean_color_extremtextil(raw):
-    raw = re.sub(r'\d+[,\.]\d+\s*EUR', '', raw)
-    raw = re.sub(r'Deliverable.*', '', raw)
-    raw = re.sub(r'Out of stock.*', '', raw)
-    raw = re.sub(r'In stock.*', '', raw)
-    raw = re.sub(r'Sold out.*', '', raw)
-    raw = re.sub(r'Available.*', '', raw)
-    return raw.strip()
+import time
+
+def get_color_availability(text):
+    """Extract availability from color link text."""
+    t = text
+    if "Out of stock" in t: return "Out of stock"
+    if "Sold out" in t: return "Sold out"
+    if "Deliverable" in t or "In stock" in t: return "In stock"
+    return "Check website"
 
 
-def get_extremtextil_image(url):
+def get_extremtextil_image(color_url):
+    """Fetch first real product image from a color page."""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=10)
+        resp = requests.get(color_url, headers=HEADERS, timeout=12)
         soup = BeautifulSoup(resp.text, "html.parser")
-        skip = ["footer", "project", "efre", "logo", "newsletter", "planer", "planner"]
+        skip = ["footer", "project", "efre", "logo", "newsletter", "planer", "planner",
+                "thumbnail", "thumb", "icon", "badge"]
         for img in soup.find_all("img"):
             src = img.get("src", "")
             if "cstatic" in src and not any(s in src.lower() for s in skip):
-                return src.split("?")[0]
+                # Prefer large images over thumbnails (no width param = full size)
+                clean = src.split("?")[0]
+                return clean
     except Exception:
         pass
     return ""
+
+
+def clean_color_name(raw):
+    """Strip price, availability info from color name."""
+    raw = re.sub(r'[\d]+[,\.][\d]+\s*EUR', '', raw)
+    raw = re.sub(r'Deliverable.*', '', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'Out of stock.*', '', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'In stock.*', '', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'Sold out.*', '', raw, flags=re.IGNORECASE)
+    raw = re.sub(r'Available.*', '', raw, flags=re.IGNORECASE)
+    return raw.strip()
 
 
 def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
@@ -194,8 +202,6 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
 
     weight = ""
     price = ""
-    availability = "Check website"
-
     for tag in soup.find_all("div"):
         t = tag.text.strip()
         if not weight and re.search(r'Weight', t) and re.search(r'\d+[,\.]?\d*\s*g/', t) and len(t) < 60:
@@ -207,31 +213,43 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
         t = tag.text.strip()
         if not price and re.search(r'\d+[,\.]\d+\s*EUR', t) and len(t) < 30:
             price = re.search(r'\d+[,\.]\d+\s*EUR', t).group()
-        if availability == "Check website":
-            if "Sold out" in t and len(t) < 100:
-                availability = "Sold out"
-            elif "In stock" in t and len(t) < 50:
-                availability = "In stock"
-            elif "Out of stock" in t and len(t) < 50:
-                availability = "Out of stock"
 
+    # Parse colors from main page — get name + url + availability from link text
+    skip_name_words = ["sqm", "g/m", "mm", "®", "/meter", "meter"]
     colors_raw = []
-    seen = []
+    seen_hrefs = set()
     for a in soup.find_all("a", href=True):
         href = a["href"]
-        if basis in href and "/en/" in href:
-            name = clean_color_extremtextil(a.text)
-            if name and name not in seen:
-                seen.append(name)
-                full = base + href if href.startswith("/") else href
-                colors_raw.append({"name": name, "url": full})
+        if basis not in href or "/en/" not in href:
+            continue
+        full = base + href if href.startswith("/") else href
+        if full in seen_hrefs:
+            continue
+        seen_hrefs.add(full)
 
-    colors_raw = [c for c in colors_raw if not any(w in c["name"] for w in ["sqm", "g/m", "mm", "®"])]
+        raw_text = a.get_text(separator=" ", strip=True)
+        name = clean_color_name(raw_text)
+        availability = get_color_availability(raw_text)
 
+        if not name or any(w in name for w in skip_name_words):
+            continue
+        # Skip if name looks like a number or unit only
+        if re.match(r'^[\d\.,\s]+$', name):
+            continue
+
+        colors_raw.append({"name": name, "url": full, "availability": availability})
+
+    # Fetch image for each color sequentially with pause
     colors = []
     for c in colors_raw:
         img = get_extremtextil_image(c["url"])
-        colors.append({"name": c["name"], "url": c["url"], "image": img})
+        colors.append({
+            "name": c["name"],
+            "url": c["url"],
+            "image": img,
+            "availability": c["availability"]
+        })
+        time.sleep(0.5)
 
     return {
         "url": url,
@@ -240,7 +258,6 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
         "title": title,
         "price": price,
         "weight": weight,
-        "availability": availability,
         "description": desc,
         "colors": colors,
         "variants": [],
@@ -398,7 +415,7 @@ def get_materials():
         sheet = service.spreadsheets()
         result = sheet.values().get(
             spreadsheetId=SPREADSHEET_ID,
-            range="Materials!A:K"
+            range="Materials!A:I"
         ).execute()
         rows = result.get("values", [])
         if len(rows) < 2:
