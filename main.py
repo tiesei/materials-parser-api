@@ -168,9 +168,13 @@ def fetch_all_colors_via_api(basis: str) -> list:
     base_url = "https://www.extremtextil.de/en/"
 
     for el in elements:
-        # Color name
+        # Color name — prefer English from translated, fallback to name
         options = el.get("options") or []
-        color_name = options[0].get("name", "") if options else ""
+        color_name = ""
+        if options:
+            opt = options[0]
+            translated_opt = opt.get("translated") or {}
+            color_name = translated_opt.get("name") or opt.get("name", "")
         if not color_name:
             translated = el.get("translated", {})
             color_name = translated.get("name", el.get("name", ""))
@@ -199,8 +203,6 @@ def fetch_all_colors_via_api(basis: str) -> list:
 
         if stock > 0:
             availability = "In stock"
-        elif available and restock_time:
-            availability = "Available soon"
         else:
             availability = "Out of stock"
 
