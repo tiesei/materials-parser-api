@@ -142,6 +142,7 @@ SW_HEADERS = {
     "Origin": "https://www.extremtextil.de",
     "Referer": "https://www.extremtextil.de/",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept-Language": "en-GB,en;q=0.9",
 }
 
 
