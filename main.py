@@ -169,16 +169,19 @@ def fetch_all_colors_via_api(basis: str) -> list:
     base_url = "https://www.extremtextil.de/en/"
 
     for el in elements:
-        # Color name — prefer English from translated, fallback to name
+        # Color name — extract from metaTitle "... in COLOR | extremtextil"
         options = el.get("options") or []
         color_name = ""
-        if options:
+        # Try metaTitle first: "Product name in bottle green | extremtextil"
+        meta_title = (el.get("translated") or {}).get("metaTitle") or el.get("metaTitle") or ""
+        if meta_title and " in " in meta_title:
+            part = meta_title.split(" in ")[-1]
+            color_name = part.replace(" | extremtextil", "").strip()
+        # Fallback to options translated name
+        if not color_name and options:
             opt = options[0]
             translated_opt = opt.get("translated") or {}
             color_name = translated_opt.get("name") or opt.get("name", "")
-        if not color_name:
-            translated = el.get("translated", {})
-            color_name = translated.get("name", el.get("name", ""))
 
         # Product URL via seoUrls
         seo_urls = el.get("seoUrls") or []
