@@ -592,12 +592,15 @@ def update_note(req: UpdateNoteRequest):
 # ── TEMPLATES ─────────────────────────────────────────────────────────────────
 
 class TemplateRequest(BaseModel):
-    name: str
+    name: str = ""
     qty: str = "1"
     productIdx: str = ""
     productName: str = ""
     rate: str = "20"
     positions: list = []
+
+    class Config:
+        extra = "allow"
 
 
 def get_templates_sheet(service):
