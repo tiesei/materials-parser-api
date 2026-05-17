@@ -587,3 +587,158 @@ def update_note(req: UpdateNoteRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+# ── TEMPLATES ─────────────────────────────────────────────────────────────────
+
+class TemplateRequest(BaseModel):
+    name: str
+    qty: str = "1"
+    productIdx: str = ""
+    productName: str = ""
+    rate: str = "20"
+    positions: list = []
+
+
+def get_templates_sheet(service):
+    sheet = service.spreadsheets()
+    # Ensure Templates sheet exists
+    meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+    sheets = [s["properties"]["title"] for s in meta.get("sheets", [])]
+    if "Templates" not in sheets:
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"requests": [{"addSheet": {"properties": {"title": "Templates"}}}]}
+        ).execute()
+        # Add header
+        sheet.values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Templates!A1:C1",
+            valueInputOption="RAW",
+            body={"values": [["name", "qty", "state"]]}
+        ).execute()
+    return sheet
+
+
+@app.get("/templates")
+def get_templates():
+    try:
+        service = get_sheets_service()
+        sheet = get_templates_sheet(service)
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Templates!A:C"
+        ).execute()
+        rows = result.get("values", [])
+        if len(rows) < 2:
+            return []
+        templates = []
+        for row in rows[1:]:
+            while len(row) < 3:
+                row.append("")
+            name, qty, state_json = row[0], row[1], row[2]
+            try:
+                state = json.loads(state_json)
+            except:
+                state = {}
+            templates.append({"name": name, "qty": qty, "state": state})
+        return templates
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+@app.post("/templates")
+def save_template(req: TemplateRequest):
+    try:
+        service = get_sheets_service()
+        sheet = get_templates_sheet(service)
+
+        state = req.dict()
+        name = req.productName or req.name or "Template"
+
+        # Check if name already exists → update
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Templates!A:A"
+        ).execute()
+        existing = result.get("values", [])
+        row_index = None
+        for i, row in enumerate(existing):
+            if row and row[0] == name:
+                row_index = i + 1
+                break
+
+        row_data = [[name, req.qty, json.dumps(state, ensure_ascii=False)]]
+
+        if row_index:
+            sheet.values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=f"Templates!A{row_index}:C{row_index}",
+                valueInputOption="RAW",
+                body={"values": row_data}
+            ).execute()
+        else:
+            sheet.values().append(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Templates!A:C",
+                valueInputOption="RAW",
+                insertDataOption="INSERT_ROWS",
+                body={"values": row_data}
+            ).execute()
+
+        return {"status": "ok", "name": name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+@app.delete("/templates/{name}")
+def delete_template(name: str):
+    try:
+        service = get_sheets_service()
+        sheet = get_templates_sheet(service)
+
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Templates!A:A"
+        ).execute()
+        existing = result.get("values", [])
+        row_index = None
+        for i, row in enumerate(existing):
+            if row and row[0] == name:
+                row_index = i
+                break
+
+        if row_index is None:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        # Get sheet id for Templates
+        meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+        sheet_id = None
+        for s in meta.get("sheets", []):
+            if s["properties"]["title"] == "Templates":
+                sheet_id = s["properties"]["sheetId"]
+                break
+
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"requests": [{
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": row_index,
+                        "endIndex": row_index + 1
+                    }
+                }
+            }]}
+        ).execute()
+
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
