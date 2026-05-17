@@ -133,50 +133,95 @@ def guess_type(title):
 
 # ── EXTREMTEXTIL ──────────────────────────────────────────────────────────────
 
-import time
+SW_ACCESS_KEY = "SWSCRXNCU2Y4AHB0DZZGRVNFMG"
+SW_API_URL = "https://shop.extremtextil.de/store-api/product"
+SW_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "Sw-Access-Key": SW_ACCESS_KEY,
+    "Origin": "https://www.extremtextil.de",
+    "Referer": "https://www.extremtextil.de/",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+}
 
-def get_color_availability(text):
-    """Extract availability from color link text."""
-    t = text
-    if "Out of stock" in t: return "Out of stock"
-    if "Sold out" in t: return "Sold out"
-    if "Deliverable" in t or "In stock" in t: return "In stock"
-    return "Check website"
 
-
-def get_extremtextil_image(color_url):
-    """Fetch first real product image from a color page."""
+def fetch_all_colors_via_api(basis: str) -> list:
+    """Fetch all color variants via Shopware Store API — one request, all colors."""
+    payload = {
+        "filter": [{"type": "contains", "field": "productNumber", "value": f"{basis}."}],
+        "associations": {
+            "seoUrls": {},
+            "options": {"associations": {"group": {}}},
+            "cover": {"associations": {"media": {}}},
+        },
+        "limit": 100,
+    }
     try:
-        resp = requests.get(color_url, headers=HEADERS, timeout=12)
-        soup = BeautifulSoup(resp.text, "html.parser")
-        skip = ["footer", "project", "efre", "logo", "newsletter", "planer", "planner",
-                "thumbnail", "thumb", "icon", "badge"]
-        for img in soup.find_all("img"):
-            src = img.get("src", "")
-            if "cstatic" in src and not any(s in src.lower() for s in skip):
-                # Prefer large images over thumbnails (no width param = full size)
-                clean = src.split("?")[0]
-                return clean
-    except Exception:
-        pass
-    return ""
+        resp = requests.post(SW_API_URL, json=payload, headers=SW_HEADERS, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        elements = data.get("elements", [])
+    except Exception as e:
+        return []
 
+    colors = []
+    base_url = "https://www.extremtextil.de/en/"
 
-def clean_color_name(raw):
-    """Strip price, availability info from color name."""
-    raw = re.sub(r'[\d]+[,\.][\d]+\s*EUR', '', raw)
-    raw = re.sub(r'Deliverable.*', '', raw, flags=re.IGNORECASE)
-    raw = re.sub(r'Out of stock.*', '', raw, flags=re.IGNORECASE)
-    raw = re.sub(r'In stock.*', '', raw, flags=re.IGNORECASE)
-    raw = re.sub(r'Sold out.*', '', raw, flags=re.IGNORECASE)
-    raw = re.sub(r'Available.*', '', raw, flags=re.IGNORECASE)
-    return raw.strip()
+    for el in elements:
+        # Color name
+        options = el.get("options") or []
+        color_name = options[0].get("name", "") if options else ""
+        if not color_name:
+            translated = el.get("translated", {})
+            color_name = translated.get("name", el.get("name", ""))
+
+        # Product URL via seoUrls
+        seo_urls = el.get("seoUrls") or []
+        if seo_urls:
+            seo_path = seo_urls[0].get("seoPathInfo", "")
+            color_url = f"https://www.extremtextil.de/en/{seo_path}"
+        else:
+            product_number = el.get("productNumber", "")
+            color_url = f"https://www.extremtextil.de/en/{basis}/{product_number}"
+
+        # Image from cover
+        cover = el.get("cover") or {}
+        media = cover.get("media") or {}
+        image_url = media.get("url", "")
+        if image_url and "?" in image_url:
+            image_url = image_url.split("?")[0]
+
+        # Availability
+        stock = el.get("availableStock", 0) or 0
+        available = el.get("available", False)
+        restock_time = el.get("restockTime")
+        delivery_time = (el.get("deliveryTime") or {}).get("translated", {}).get("name", "")
+
+        if stock > 0:
+            availability = "In stock"
+        elif available and restock_time:
+            availability = "Available soon"
+        else:
+            availability = "Out of stock"
+
+        # Price
+        calc_price = el.get("calculatedPrice") or {}
+        unit_price = calc_price.get("unitPrice", 0)
+
+        colors.append({
+            "name": color_name,
+            "url": color_url,
+            "image": image_url,
+            "availability": availability,
+            "price_per_unit": unit_price,
+        })
+
+    return colors
 
 
 def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
     artikul = url.split("/")[-1]
     basis = artikul.split(".")[0]
-    base = "https://www.extremtextil.de"
 
     title_tag = soup.title
     title = title_tag.text.strip().replace(" | extremtextil", "") if title_tag else url
@@ -214,42 +259,13 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
         if not price and re.search(r'\d+[,\.]\d+\s*EUR', t) and len(t) < 30:
             price = re.search(r'\d+[,\.]\d+\s*EUR', t).group()
 
-    # Parse colors from main page — get name + url + availability from link text
-    skip_name_words = ["sqm", "g/m", "mm", "®", "/meter", "meter"]
-    colors_raw = []
-    seen_hrefs = set()
-    for a in soup.find_all("a", href=True):
-        href = a["href"]
-        if basis not in href or "/en/" not in href:
-            continue
-        full = base + href if href.startswith("/") else href
-        if full in seen_hrefs:
-            continue
-        seen_hrefs.add(full)
+    # Fetch ALL colors via Shopware API — one request, no limit
+    colors = fetch_all_colors_via_api(basis)
 
-        raw_text = a.get_text(separator=" ", strip=True)
-        name = clean_color_name(raw_text)
-        availability = get_color_availability(raw_text)
-
-        if not name or any(w in name for w in skip_name_words):
-            continue
-        # Skip if name looks like a number or unit only
-        if re.match(r'^[\d\.,\s]+$', name):
-            continue
-
-        colors_raw.append({"name": name, "url": full, "availability": availability})
-
-    # Fetch image for each color sequentially with pause
-    colors = []
-    for c in colors_raw:
-        img = get_extremtextil_image(c["url"])
-        colors.append({
-            "name": c["name"],
-            "url": c["url"],
-            "image": img,
-            "availability": c["availability"]
-        })
-        time.sleep(0.5)
+    # Fallback: if API returned nothing, price from first color
+    if colors and not price and colors[0].get("price_per_unit"):
+        p = colors[0]["price_per_unit"]
+        price = f"{p:.2f} EUR".replace(".", ",")
 
     return {
         "url": url,
