@@ -223,8 +223,9 @@ def fetch_all_colors_via_api(basis: str) -> list:
         # Availability
         availability = "In stock" if (el.get("availableStock") or 0) > 0 else "Out of stock"
 
-        # Price per variant
-        unit_price = (el.get("calculatedPrice") or {}).get("unitPrice") or 0
+        # Price — Shopware returns price per smallest unit, multiply by 100 to get EUR per meter/sqm
+        raw_price = (el.get("calculatedPrice") or {}).get("unitPrice") or 0
+        unit_price = round(raw_price * 100, 2)
 
         colors.append({
             "name": color_name,
@@ -268,19 +269,20 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
                 weight = m.group()
                 break
 
-    price = ""
-    for tag in soup.find_all(["span", "div", "p"]):
-        t = tag.text.strip()
-        if not price and len(t) < 30:
-            m = re.search(r'\d+[,\.]\d+\s*EUR', t)
-            if m:
-                price = m.group()
-                break
-
     colors = fetch_all_colors_via_api(basis)
 
-    if colors and not price and colors[0].get("price_per_unit"):
+    # Price from first color (already corrected), fallback to HTML scrape
+    price = ""
+    if colors and colors[0].get("price_per_unit"):
         price = f"{colors[0]['price_per_unit']:.2f} EUR".replace(".", ",")
+    else:
+        for tag in soup.find_all(["span", "div", "p"]):
+            t = tag.text.strip()
+            if not price and len(t) < 30:
+                m = re.search(r'\d+[,\.]\d+\s*EUR', t)
+                if m:
+                    price = m.group()
+                    break
 
     return {
         "url": url,
