@@ -166,7 +166,7 @@ def get_english_language_id() -> str:
     return ""
 
 
-def fetch_all_colors_via_api(basis: str) -> list:
+def fetch_all_colors_via_api(basis: str, material_type: str = "Fabric") -> list:
     lang_id = get_english_language_id()
     headers = dict(SW_HEADERS)
     if lang_id:
@@ -223,9 +223,13 @@ def fetch_all_colors_via_api(basis: str) -> list:
         # Availability
         availability = "In stock" if (el.get("availableStock") or 0) > 0 else "Out of stock"
 
-        # Price — Shopware returns price per smallest unit, multiply by 100 to get EUR per meter/sqm
+        # Price — Shopware returns price in EUR already for per-piece items
+        # Only multiply by 100 for Fabric/Foam (price stored as EUR/cm² → EUR/sqm)
         raw_price = (el.get("calculatedPrice") or {}).get("unitPrice") or 0
-        unit_price = round(raw_price * 100, 2)
+        if material_type in ("Zipper", "Furniture", "Webbing"):
+            unit_price = round(raw_price, 2)
+        else:
+            unit_price = round(raw_price * 100, 2)
 
         colors.append({
             "name": color_name,
@@ -269,7 +273,8 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
                 weight = m.group()
                 break
 
-    colors = fetch_all_colors_via_api(basis)
+    material_type = guess_type(title)
+    colors = fetch_all_colors_via_api(basis, material_type)
 
     # Price from first color (already corrected), fallback to HTML scrape
     price = ""
