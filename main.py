@@ -416,6 +416,11 @@ def root():
     return {"status": "ok", "message": "Materials parser API", "supported": ALLOWED_DOMAINS}
 
 
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
 @app.post("/parse")
 def parse(req: ParseRequest):
     data = parse_page(req.url)
