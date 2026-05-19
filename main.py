@@ -517,6 +517,85 @@ def save_products(req: ProductsUpdateRequest):
         raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
 
 
+# ── FEATURES ──────────────────────────────────────────────────────────────────
+
+@app.get("/features")
+def get_features():
+    try:
+        service = get_sheets_service()
+        meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+        sheets = [s["properties"]["title"] for s in meta.get("sheets", [])]
+        if "Features" not in sheets:
+            return {"headers": [], "features": []}
+        result = service.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Features!A:Z"
+        ).execute()
+        rows = result.get("values", [])
+        if len(rows) < 2:
+            return {"headers": rows[0] if rows else [], "features": []}
+        headers = rows[0]
+        features = []
+        for row in rows[1:]:
+            while len(row) < len(headers):
+                row.append("")
+            features.append(dict(zip(headers, row)))
+        return {"headers": headers, "features": features}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+@app.post("/features")
+def save_features(req: ProductsUpdateRequest):
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+
+        # Ensure Features sheet exists
+        meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+        sheets = [s["properties"]["title"] for s in meta.get("sheets", [])]
+        if "Features" not in sheets:
+            service.spreadsheets().batchUpdate(
+                spreadsheetId=SPREADSHEET_ID,
+                body={"requests": [{"addSheet": {"properties": {"title": "Features"}}}]}
+            ).execute()
+
+        if req.headers:
+            header_row = req.headers
+        else:
+            result = sheet.values().get(
+                spreadsheetId=SPREADSHEET_ID,
+                range="Features!A1:Z1"
+            ).execute()
+            header_row = result.get("values", [[]])[0]
+            if not header_row:
+                raise HTTPException(status_code=400, detail="No headers in Features sheet")
+
+        rows = [header_row] + [
+            [str(feature.get(h, "")) for h in header_row]
+            for feature in req.products
+        ]
+
+        sheet.values().clear(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Features!A:Z"
+        ).execute()
+        sheet.values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Features!A1",
+            valueInputOption="RAW",
+            body={"values": rows}
+        ).execute()
+
+        return {"status": "ok", "saved": len(req.products)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
 class UpdateTypeRequest(BaseModel):
     url: str
     type: str
