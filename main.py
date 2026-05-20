@@ -225,13 +225,14 @@ def fetch_all_colors_via_api(basis: str, material_type: str = "Fabric") -> list:
         # Availability
         availability = "In stock" if (el.get("availableStock") or 0) > 0 else "Out of stock"
 
-        # Price — Shopware returns price in EUR already for per-piece items
-        # Only multiply by 100 for Fabric/Foam (price stored as EUR/cm² → EUR/sqm)
-        raw_price = (el.get("calculatedPrice") or {}).get("unitPrice") or 0
-        if material_type in ("Zipper", "Furniture", "Webbing"):
-            unit_price = round(raw_price, 2)
+        # Price — use referencePrice (per meter/sqm/piece as shown on site) if available
+        # else fall back to unitPrice. No multiplication — take price as-is from API.
+        cp = el.get("calculatedPrice") or {}
+        rp = cp.get("referencePrice")
+        if rp and rp.get("price"):
+            unit_price = round(rp["price"], 2)
         else:
-            unit_price = round(raw_price * 100, 2)
+            unit_price = round(cp.get("unitPrice") or 0, 2)
 
         colors.append({
             "name": color_name,
@@ -316,10 +317,10 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
             if els:
                 el = els[0]
                 raw = (el.get("calculatedPrice") or {}).get("unitPrice") or 0
-                # For non-fabric types keep raw price, for fabric multiply by 100
-                # Unknown type ("") — keep raw price, don't multiply
-                if material_type in ("Fabric", "Foam"):
-                    price_float = round(raw * 100, 2)
+                # Use referencePrice if available (price per meter/sqm/piece as on site)
+                rp2 = (el.get("calculatedPrice") or {}).get("referencePrice")
+                if rp2 and rp2.get("price"):
+                    price_float = round(rp2["price"], 2)
                 else:
                     price_float = round(raw, 2)
                 if price_float:
