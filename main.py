@@ -136,10 +136,12 @@ def guess_type(title: str) -> str:
     if any(w in t for w in ["webbing", "strap", "ribbon", "binding", "edge", "tape"]):
         return "Webbing"
     if any(w in t for w in ["buckle", "hardware", "clip", "hook", "snap", "toggle", "loop", "ring", "cord lock", "stopper", "puller"]):
-        return "Furniture"
+        return "Hardware"
     if any(w in t for w in ["foam", "evazote", "eva ", "padding"]):
         return "Foam"
-    return "Fabric"
+    if any(w in t for w in ["fabric", "textile", "nylon", "polyester", "ripstop", "dyneema", "cordura", "canvas", "fleece", "mesh", "lining", "x-pac", "ecopak", "silnylon", "cuben"]):
+        return "Fabric"
+    return ""  # unknown — user must select
 
 
 # ── EXTREMTEXTIL ──────────────────────────────────────────────────────────────
@@ -299,6 +301,7 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
         "description": desc,
         "colors": colors,
         "variants": [],
+        "type_uncertain": guess_type(title) == "",
     }
 
 
@@ -392,6 +395,7 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
         "description": desc,
         "colors": colors,
         "variants": variants,
+        "type_uncertain": guess_type(title) == "",
     }
 
 
