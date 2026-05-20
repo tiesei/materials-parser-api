@@ -317,10 +317,11 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
                 el = els[0]
                 raw = (el.get("calculatedPrice") or {}).get("unitPrice") or 0
                 # For non-fabric types keep raw price, for fabric multiply by 100
-                if material_type in ("Zipper", "Hardware", "Webbing"):
-                    price_float = round(raw, 2)
-                else:
+                # Unknown type ("") — keep raw price, don't multiply
+                if material_type in ("Fabric", "Foam"):
                     price_float = round(raw * 100, 2)
+                else:
+                    price_float = round(raw, 2)
                 if price_float:
                     price = f"{price_float:.2f} EUR".replace(".", ",")
                 # Get image from cover if og not found
@@ -520,6 +521,48 @@ def get_materials():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+@app.delete("/materials")
+def delete_material(url: str):
+    """Delete a material row by URL."""
+    try:
+        service = get_sheets_service()
+        sheet = service.spreadsheets()
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Materials!I:I"
+        ).execute()
+        existing_urls = result.get("values", [])
+        row_index = None
+        for i, row in enumerate(existing_urls):
+            if row and row[0] == url:
+                row_index = i
+                break
+        if row_index is None:
+            raise HTTPException(status_code=404, detail="Material not found")
+
+        meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+        sheet_id = None
+        for s in meta.get("sheets", []):
+            if s["properties"]["title"] == "Materials":
+                sheet_id = s["properties"]["sheetId"]
+                break
+
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"requests": [{"deleteDimension": {"range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": row_index,
+                "endIndex": row_index + 1
+            }}}]}
+        ).execute()
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
 
 
 @app.get("/products")
