@@ -291,6 +291,31 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
                     price = m.group()
                     break
 
+    # Fallback: if no colors found via API, create a default entry using og:image
+    if not colors:
+        og_image = ""
+        og_tag = soup.find("meta", property="og:image")
+        if og_tag and og_tag.get("content"):
+            og_image = og_tag["content"].split("?")[0]
+
+        # Try to parse price as float for price_per_unit
+        price_float = 0.0
+        if price:
+            m = re.search(r'[\d,\.]+', price.replace(",", "."))
+            if m:
+                try:
+                    price_float = float(m.group())
+                except Exception:
+                    pass
+
+        colors = [{
+            "name": "Default",
+            "url": url,
+            "image": og_image,
+            "availability": "In stock",
+            "price_per_unit": price_float,
+        }]
+
     return {
         "url": url,
         "source": "extremtextil.de",
