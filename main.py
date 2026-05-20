@@ -291,20 +291,50 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
                     price = m.group()
                     break
 
-    # Fallback: if no colors found via API, create a default entry using og:image
+    # Fallback: if no colors found via API, fetch base product directly
     if not colors:
         og_image = ""
         og_tag = soup.find("meta", property="og:image")
         if og_tag and og_tag.get("content"):
             og_image = og_tag["content"].split("?")[0]
 
-        # Try to parse price as float for price_per_unit
         price_float = 0.0
-        if price:
-            m = re.search(r'[\d,\.]+', price.replace(",", "."))
-            if m:
+        # Try fetching base product price from Shopware API directly
+        try:
+            lang_id = get_english_language_id()
+            hdrs = dict(SW_HEADERS)
+            if lang_id:
+                hdrs["sw-language-id"] = lang_id
+            payload = {
+                "filter": [{"type": "equals", "field": "productNumber", "value": basis}],
+                "associations": {"cover": {"associations": {"media": {}}}},
+                "limit": 1,
+            }
+            resp2 = requests.post(SW_API_URL, json=payload, headers=hdrs, timeout=10)
+            resp2.raise_for_status()
+            els = resp2.json().get("elements", [])
+            if els:
+                el = els[0]
+                raw = (el.get("calculatedPrice") or {}).get("unitPrice") or 0
+                # For non-fabric types keep raw price, for fabric multiply by 100
+                if material_type in ("Zipper", "Hardware", "Webbing"):
+                    price_float = round(raw, 2)
+                else:
+                    price_float = round(raw * 100, 2)
+                if price_float:
+                    price = f"{price_float:.2f} EUR".replace(".", ",")
+                # Get image from cover if og not found
+                if not og_image:
+                    og_image = (((el.get("cover") or {}).get("media") or {}).get("url") or "").split("?")[0]
+        except Exception:
+            pass
+
+        # Last resort: parse price from HTML text
+        if not price_float and price:
+            m2 = re.search(r'([\d]+)[,\.]([\d]+)', price)
+            if m2:
                 try:
-                    price_float = float(m.group())
+                    price_float = float(f"{m2.group(1)}.{m2.group(2)}")
                 except Exception:
                     pass
 
