@@ -281,16 +281,33 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
 
     # Price from first color (already corrected), fallback to HTML scrape
     price = ""
-    if colors and colors[0].get("price_per_unit"):
+    if colors and colors[0].get("price_per_unit") and colors[0]["price_per_unit"] > 0.01:
         price = f"{colors[0]['price_per_unit']:.2f} EUR".replace(".", ",")
-    else:
-        for tag in soup.find_all(["span", "div", "p"]):
-            t = tag.text.strip()
-            if not price and len(t) < 30:
-                m = re.search(r'\d+[,\.]\d+\s*EUR', t)
-                if m:
-                    price = m.group()
-                    break
+
+    # HTML fallback: parse price directly from page text
+    if not price:
+        # Try €X.XX/meter or X,XX EUR patterns
+        full_text = soup.get_text(" ", strip=True)
+        m = re.search(r'€\s*([\d]+[,\.][\d]+)\s*/\s*(?:meter|sqm|piece|m\b)', full_text)
+        if m:
+            price_str = m.group(1).replace(",", ".")
+            price_float = round(float(price_str), 2)
+            price = f"{price_float:.2f} EUR".replace(".", ",")
+            # Update first color price_per_unit if available
+            if colors:
+                colors[0]["price_per_unit"] = price_float
+        else:
+            for tag in soup.find_all(["span", "div", "p"]):
+                t = tag.get_text(strip=True)
+                if not price and len(t) < 30:
+                    m2 = re.search(r'(\d+)[,\.](\d+)\s*EUR', t)
+                    if m2:
+                        price_str = f"{m2.group(1)}.{m2.group(2)}"
+                        price_float = round(float(price_str), 2)
+                        price = f"{price_float:.2f} EUR".replace(".", ",")
+                        if colors:
+                            colors[0]["price_per_unit"] = price_float
+                        break
 
     # Fallback: if no colors found via API, fetch base product directly
     if not colors:
