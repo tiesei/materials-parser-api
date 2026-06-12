@@ -281,7 +281,10 @@ def fetch_all_colors_via_api(basis: str, material_type: str = "Fabric") -> list:
             raw_price = cp.get("unitPrice") or 0
             purchase_unit = el.get("purchaseUnit") or cp.get("purchaseUnit") or 1
             reference_unit = el.get("referenceUnit") or cp.get("referenceUnit") or 1
-            if raw_price and purchase_unit:
+            custom_fields = el.get("customFields") or {}
+            if raw_price and custom_fields.get("custom_sold_by_meter_active"):
+                unit_price = round(raw_price * 100, 2)
+            elif raw_price and purchase_unit:
                 unit_price = round(raw_price / purchase_unit * reference_unit, 2)
             else:
                 unit_price = round(raw_price, 2)
