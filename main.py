@@ -923,7 +923,7 @@ def save_template(req: TemplateRequest):
         sheet = get_templates_sheet(service)
 
         state = req.dict()
-        name = req.productName or req.name or "Template"
+        name = req.name or req.productName or "Template"
 
         # Check if name already exists → update
         result = sheet.values().get(
