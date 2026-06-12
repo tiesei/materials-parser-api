@@ -919,4 +919,53 @@ def save_template(req: TemplateRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPExcepti
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+@app.delete("/templates/{name}")
+def delete_template(name: str):
+    try:
+        service = get_sheets_service()
+        sheet = get_templates_sheet(service)
+
+        result = sheet.values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range="Templates!A:A"
+        ).execute()
+        existing = result.get("values", [])
+        row_index = None
+        for i, row in enumerate(existing):
+            if row and row[0] == name:
+                row_index = i
+                break
+
+        if row_index is None:
+            raise HTTPException(status_code=404, detail="Template not found")
+
+        # Get sheet id for Templates
+        meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+        sheet_id = None
+        for s in meta.get("sheets", []):
+            if s["properties"]["title"] == "Templates":
+                sheet_id = s["properties"]["sheetId"]
+                break
+
+        service.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={"requests": [{
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": row_index,
+                        "endIndex": row_index + 1
+                    }
+                }
+            }]}
+        ).execute()
+
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
