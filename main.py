@@ -433,13 +433,12 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
 
     variants = []
     for select in soup.find_all("select", attrs={"name": re.compile(r"attribute_")}):
-        label_tag = select.find_previous("label")
         attr_name = (
-            label_tag.get_text(strip=True) if label_tag
-            else select.get("name", "")
-                .replace("attribute_pa_", "")
-                .replace("attribute_", "")
-                .capitalize()
+            select.get("name", "")
+            .replace("attribute_pa_", "")
+            .replace("attribute_", "")
+            .replace("-", " ")
+            .capitalize()
         )
         options = [
             opt.get_text(strip=True) for opt in select.find_all("option")
@@ -465,7 +464,6 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
                 "name": opt,
                 "url": url,
                 "image": images[i] if i < len(images) else (images[0] if images else ""),
-                "attribute": variants[0]["attribute"],
             }
             for i, opt in enumerate(variants[0]["options"])
         ]
@@ -482,7 +480,7 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
         "availability": availability,
         "description": desc,
         "colors": colors,
-        "variants": variants,
+        "variants": [],
     }
 
 
