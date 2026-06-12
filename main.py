@@ -223,8 +223,7 @@ def fetch_all_colors_via_api(basis: str, material_type: str = "Fabric") -> list:
         # Availability
         availability = "In stock" if (el.get("availableStock") or 0) > 0 else "Out of stock"
 
-        # Price — use referencePrice if available (price per meter/sqm/piece as shown on site)
-        # Otherwise fall back to unitPrice * 100 for fabric/foam, raw for others
+        # Price — use referencePrice (per meter/sqm/piece as shown on site) if available
         cp = el.get("calculatedPrice") or {}
         rp = cp.get("referencePrice")
         if rp and rp.get("price"):
@@ -281,18 +280,33 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
     material_type = guess_type(title)
     colors = fetch_all_colors_via_api(basis, material_type)
 
-    # Price from first color (already corrected), fallback to HTML scrape
+    # Price: use API price if > 0.01, else parse from HTML
     price = ""
-    if colors and colors[0].get("price_per_unit"):
-        price = f"{colors[0]['price_per_unit']:.2f} EUR".replace(".", ",")
-    else:
-        for tag in soup.find_all(["span", "div", "p"]):
-            t = tag.text.strip()
-            if not price and len(t) < 30:
-                m = re.search(r'\d+[,\.]\d+\s*EUR', t)
-                if m:
-                    price = m.group()
-                    break
+    api_price = colors[0].get("price_per_unit") if colors else 0
+    if api_price and api_price > 0.01:
+        price = f"{api_price:.2f} EUR".replace(".", ",")
+
+    if not price:
+        # Try €X.XX/meter pattern first
+        full_text = soup.get_text(" ", strip=True)
+        m = re.search(r'€\s*([\d]+[,\.]?[\d]*)\s*/\s*(?:meter|sqm|piece|m\b)', full_text)
+        if m:
+            price_float = round(float(m.group(1).replace(",", ".")), 2)
+            price = f"{price_float:.2f} EUR".replace(".", ",")
+            if colors:
+                colors[0]["price_per_unit"] = price_float
+        else:
+            # Fallback: find X,XX EUR in page text
+            for tag in soup.find_all(["span", "div", "p"]):
+                t = tag.get_text(strip=True)
+                if not price and len(t) < 40:
+                    m2 = re.search(r'(\d+)[,\.](\d+)\s*EUR', t)
+                    if m2:
+                        price_float = round(float(f"{m2.group(1)}.{m2.group(2)}"), 2)
+                        price = f"{price_float:.2f} EUR".replace(".", ",")
+                        if colors:
+                            colors[0]["price_per_unit"] = price_float
+                        break
 
     return {
         "url": url,
