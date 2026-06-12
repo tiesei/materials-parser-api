@@ -142,6 +142,55 @@ def guess_type(title: str) -> str:
     return "Fabric"
 
 
+def parse_price_number(value: str) -> float:
+    cleaned = (
+        value.replace("\xa0", "")
+        .replace(" ", "")
+        .replace("'", "")
+        .strip()
+    )
+    if "," in cleaned and "." in cleaned:
+        if cleaned.rfind(",") > cleaned.rfind("."):
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        else:
+            cleaned = cleaned.replace(",", "")
+    elif "," in cleaned:
+        cleaned = cleaned.replace(",", ".")
+    return round(float(cleaned), 2)
+
+
+def format_price_eur(value: float) -> str:
+    return f"{round(value, 2):.2f} EUR".replace(".", ",")
+
+
+def extract_price_value(text: str, require_unit: bool = False):
+    normalized = text.replace("\xa0", " ")
+    number = r"(\d+(?:[,.]\d+)*)"
+    currency = r"(?:\u20ac|\u00e2\u201a\u00ac|EUR)"
+    unit = r"(?:meter|metre|sqm|m2|qm|piece|pcs?|m\b)"
+
+    if require_unit:
+        patterns = [
+            rf"{currency}\s*{number}\s*/\s*{unit}",
+            rf"{number}\s*{currency}\s*/\s*{unit}",
+            rf"{number}\s*/\s*{unit}",
+        ]
+    else:
+        patterns = [
+            rf"{currency}\s*{number}",
+            rf"{number}\s*{currency}",
+        ]
+
+    for pattern in patterns:
+        match = re.search(pattern, normalized, re.I)
+        if match:
+            try:
+                return parse_price_number(match.group(1))
+            except ValueError:
+                return None
+    return None
+
+
 # ── EXTREMTEXTIL ──────────────────────────────────────────────────────────────
 
 def get_english_language_id() -> str:
@@ -290,9 +339,17 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
         if isinstance(c.get("price_per_unit"), (int, float)) and c.get("price_per_unit") > 0.01
     })
     if len(api_prices) == 1:
-        price = f"{api_prices[0]:.2f} EUR".replace(".", ",")
+        price = format_price_eur(api_prices[0])
     elif len(api_prices) > 1:
-        price = f"{api_prices[0]:.2f}-{api_prices[-1]:.2f} EUR".replace(".", ",")
+        price = f"{format_price_eur(api_prices[0]).replace(' EUR', '')}-{format_price_eur(api_prices[-1])}"
+
+    if not price:
+        full_text = soup.get_text(" ", strip=True)
+        price_float = extract_price_value(full_text, require_unit=True)
+        if price_float:
+            price = format_price_eur(price_float)
+            if colors:
+                colors[0]["price_per_unit"] = price_float
 
     if not price:
         # Try €X.XX/meter pattern first
@@ -340,6 +397,10 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
     price = ""
     price_tag = soup.find("p", class_="price") or soup.find("span", class_="woocommerce-Price-amount")
     if price_tag:
+        price_float = extract_price_value(price_tag.get_text(" ", strip=True))
+        if price_float:
+            price = format_price_eur(price_float)
+    if not price and price_tag:
         m = re.search(r'[\d,\.]+\s*€', price_tag.get_text(strip=True))
         if m:
             price = m.group().replace("\xa0", "").strip()
