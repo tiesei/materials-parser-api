@@ -136,12 +136,10 @@ def guess_type(title: str) -> str:
     if any(w in t for w in ["webbing", "strap", "ribbon", "binding", "edge", "tape"]):
         return "Webbing"
     if any(w in t for w in ["buckle", "hardware", "clip", "hook", "snap", "toggle", "loop", "ring", "cord lock", "stopper", "puller"]):
-        return "Hardware"
+        return "Furniture"
     if any(w in t for w in ["foam", "evazote", "eva ", "padding"]):
         return "Foam"
-    if any(w in t for w in ["fabric", "textile", "nylon", "polyester", "ripstop", "dyneema", "cordura", "canvas", "fleece", "mesh", "lining", "x-pac", "ecopak", "silnylon", "cuben"]):
-        return "Fabric"
-    return ""  # unknown — user must select
+    return "Fabric"
 
 
 # ── EXTREMTEXTIL ──────────────────────────────────────────────────────────────
@@ -225,14 +223,18 @@ def fetch_all_colors_via_api(basis: str, material_type: str = "Fabric") -> list:
         # Availability
         availability = "In stock" if (el.get("availableStock") or 0) > 0 else "Out of stock"
 
-        # Price — use referencePrice (per meter/sqm/piece as shown on site) if available
-        # else fall back to unitPrice. No multiplication — take price as-is from API.
+        # Price — use referencePrice if available (price per meter/sqm/piece as shown on site)
+        # Otherwise fall back to unitPrice * 100 for fabric/foam, raw for others
         cp = el.get("calculatedPrice") or {}
         rp = cp.get("referencePrice")
         if rp and rp.get("price"):
             unit_price = round(rp["price"], 2)
         else:
-            unit_price = round(cp.get("unitPrice") or 0, 2)
+            raw_price = cp.get("unitPrice") or 0
+            if material_type in ("Fabric", "Foam"):
+                unit_price = round(raw_price * 100, 2)
+            else:
+                unit_price = round(raw_price, 2)
 
         colors.append({
             "name": color_name,
@@ -281,89 +283,16 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
 
     # Price from first color (already corrected), fallback to HTML scrape
     price = ""
-    if colors and colors[0].get("price_per_unit") and colors[0]["price_per_unit"] > 0.01:
+    if colors and colors[0].get("price_per_unit"):
         price = f"{colors[0]['price_per_unit']:.2f} EUR".replace(".", ",")
-
-    # HTML fallback: parse price directly from page text
-    if not price:
-        # Try €X.XX/meter or X,XX EUR patterns
-        full_text = soup.get_text(" ", strip=True)
-        m = re.search(r'€\s*([\d]+[,\.][\d]+)\s*/\s*(?:meter|sqm|piece|m\b)', full_text)
-        if m:
-            price_str = m.group(1).replace(",", ".")
-            price_float = round(float(price_str), 2)
-            price = f"{price_float:.2f} EUR".replace(".", ",")
-            # Update first color price_per_unit if available
-            if colors:
-                colors[0]["price_per_unit"] = price_float
-        else:
-            for tag in soup.find_all(["span", "div", "p"]):
-                t = tag.get_text(strip=True)
-                if not price and len(t) < 30:
-                    m2 = re.search(r'(\d+)[,\.](\d+)\s*EUR', t)
-                    if m2:
-                        price_str = f"{m2.group(1)}.{m2.group(2)}"
-                        price_float = round(float(price_str), 2)
-                        price = f"{price_float:.2f} EUR".replace(".", ",")
-                        if colors:
-                            colors[0]["price_per_unit"] = price_float
-                        break
-
-    # Fallback: if no colors found via API, fetch base product directly
-    if not colors:
-        og_image = ""
-        og_tag = soup.find("meta", property="og:image")
-        if og_tag and og_tag.get("content"):
-            og_image = og_tag["content"].split("?")[0]
-
-        price_float = 0.0
-        # Try fetching base product price from Shopware API directly
-        try:
-            lang_id = get_english_language_id()
-            hdrs = dict(SW_HEADERS)
-            if lang_id:
-                hdrs["sw-language-id"] = lang_id
-            payload = {
-                "filter": [{"type": "equals", "field": "productNumber", "value": basis}],
-                "associations": {"cover": {"associations": {"media": {}}}},
-                "limit": 1,
-            }
-            resp2 = requests.post(SW_API_URL, json=payload, headers=hdrs, timeout=10)
-            resp2.raise_for_status()
-            els = resp2.json().get("elements", [])
-            if els:
-                el = els[0]
-                raw = (el.get("calculatedPrice") or {}).get("unitPrice") or 0
-                # Use referencePrice if available (price per meter/sqm/piece as on site)
-                rp2 = (el.get("calculatedPrice") or {}).get("referencePrice")
-                if rp2 and rp2.get("price"):
-                    price_float = round(rp2["price"], 2)
-                else:
-                    price_float = round(raw, 2)
-                if price_float:
-                    price = f"{price_float:.2f} EUR".replace(".", ",")
-                # Get image from cover if og not found
-                if not og_image:
-                    og_image = (((el.get("cover") or {}).get("media") or {}).get("url") or "").split("?")[0]
-        except Exception:
-            pass
-
-        # Last resort: parse price from HTML text
-        if not price_float and price:
-            m2 = re.search(r'([\d]+)[,\.]([\d]+)', price)
-            if m2:
-                try:
-                    price_float = float(f"{m2.group(1)}.{m2.group(2)}")
-                except Exception:
-                    pass
-
-        colors = [{
-            "name": "Default",
-            "url": url,
-            "image": og_image,
-            "availability": "In stock",
-            "price_per_unit": price_float,
-        }]
+    else:
+        for tag in soup.find_all(["span", "div", "p"]):
+            t = tag.text.strip()
+            if not price and len(t) < 30:
+                m = re.search(r'\d+[,\.]\d+\s*EUR', t)
+                if m:
+                    price = m.group()
+                    break
 
     return {
         "url": url,
@@ -375,7 +304,6 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
         "description": desc,
         "colors": colors,
         "variants": [],
-        "type_uncertain": guess_type(title) == "",
     }
 
 
@@ -469,7 +397,6 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
         "description": desc,
         "colors": colors,
         "variants": variants,
-        "type_uncertain": guess_type(title) == "",
     }
 
 
@@ -539,48 +466,6 @@ def get_materials():
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
-
-@app.delete("/materials")
-def delete_material(url: str):
-    """Delete a material row by URL."""
-    try:
-        service = get_sheets_service()
-        sheet = service.spreadsheets()
-        result = sheet.values().get(
-            spreadsheetId=SPREADSHEET_ID,
-            range="Materials!I:I"
-        ).execute()
-        existing_urls = result.get("values", [])
-        row_index = None
-        for i, row in enumerate(existing_urls):
-            if row and row[0] == url:
-                row_index = i
-                break
-        if row_index is None:
-            raise HTTPException(status_code=404, detail="Material not found")
-
-        meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
-        sheet_id = None
-        for s in meta.get("sheets", []):
-            if s["properties"]["title"] == "Materials":
-                sheet_id = s["properties"]["sheetId"]
-                break
-
-        service.spreadsheets().batchUpdate(
-            spreadsheetId=SPREADSHEET_ID,
-            body={"requests": [{"deleteDimension": {"range": {
-                "sheetId": sheet_id,
-                "dimension": "ROWS",
-                "startIndex": row_index,
-                "endIndex": row_index + 1
-            }}}]}
-        ).execute()
-        return {"status": "ok"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
-
 
 
 @app.get("/products")
