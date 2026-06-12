@@ -230,8 +230,10 @@ def fetch_all_colors_via_api(basis: str, material_type: str = "Fabric") -> list:
             unit_price = round(rp["price"], 2)
         else:
             raw_price = cp.get("unitPrice") or 0
-            if material_type in ("Fabric", "Foam"):
-                unit_price = round(raw_price * 100, 2)
+            purchase_unit = el.get("purchaseUnit") or cp.get("purchaseUnit") or 1
+            reference_unit = el.get("referenceUnit") or cp.get("referenceUnit") or 1
+            if raw_price and purchase_unit:
+                unit_price = round(raw_price / purchase_unit * reference_unit, 2)
             else:
                 unit_price = round(raw_price, 2)
 
@@ -280,11 +282,17 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
     material_type = guess_type(title)
     colors = fetch_all_colors_via_api(basis, material_type)
 
-    # Price: use API price if > 0.01, else parse from HTML
+    # Price: show a range when variants have different prices.
     price = ""
-    api_price = colors[0].get("price_per_unit") if colors else 0
-    if api_price and api_price > 0.01:
-        price = f"{api_price:.2f} EUR".replace(".", ",")
+    api_prices = sorted({
+        round(c.get("price_per_unit"), 2)
+        for c in colors
+        if isinstance(c.get("price_per_unit"), (int, float)) and c.get("price_per_unit") > 0.01
+    })
+    if len(api_prices) == 1:
+        price = f"{api_prices[0]:.2f} EUR".replace(".", ",")
+    elif len(api_prices) > 1:
+        price = f"{api_prices[0]:.2f}-{api_prices[-1]:.2f} EUR".replace(".", ",")
 
     if not price:
         # Try €X.XX/meter pattern first
