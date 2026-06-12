@@ -131,12 +131,12 @@ def save_to_sheets(data: dict):
 
 def guess_type(title: str) -> str:
     t = title.lower()
-    if any(w in t for w in ["zipper", "zip", "slider", "closure", "vislon", "aquaguard", "coil"]):
+    if any(w in t for w in ["buckle", "hardware", "clip", "hook", "snap", "toggle", "loop", "ring", "cord lock", "stopper", "puller"]):
+        return "Furniture"
+    if any(w in t for w in ["zipper", "slider", "closure", "vislon", "aquaguard", "coil"]) or re.search(r"\bzip\b", t):
         return "Zipper"
     if any(w in t for w in ["webbing", "strap", "ribbon", "binding", "edge", "tape"]):
         return "Webbing"
-    if any(w in t for w in ["buckle", "hardware", "clip", "hook", "snap", "toggle", "loop", "ring", "cord lock", "stopper", "puller"]):
-        return "Furniture"
     if any(w in t for w in ["foam", "evazote", "eva ", "padding"]):
         return "Foam"
     return "Fabric"
@@ -273,21 +273,7 @@ def fetch_all_colors_via_api(basis: str, material_type: str = "Fabric") -> list:
         availability = "In stock" if (el.get("availableStock") or 0) > 0 else "Out of stock"
 
         # Price — use referencePrice (per meter/sqm/piece as shown on site) if available
-        cp = el.get("calculatedPrice") or {}
-        rp = cp.get("referencePrice")
-        if rp and rp.get("price"):
-            unit_price = round(rp["price"], 2)
-        else:
-            raw_price = cp.get("unitPrice") or 0
-            purchase_unit = el.get("purchaseUnit") or cp.get("purchaseUnit") or 1
-            reference_unit = el.get("referenceUnit") or cp.get("referenceUnit") or 1
-            custom_fields = el.get("customFields") or {}
-            if raw_price and custom_fields.get("custom_sold_by_meter_active"):
-                unit_price = round(raw_price * 100, 2)
-            elif raw_price and purchase_unit:
-                unit_price = round(raw_price / purchase_unit * reference_unit, 2)
-            else:
-                unit_price = round(raw_price, 2)
+        unit_price = product_api_price(el)
 
         colors.append({
             "name": color_name,
@@ -298,6 +284,47 @@ def fetch_all_colors_via_api(basis: str, material_type: str = "Fabric") -> list:
         })
 
     return colors
+
+
+def fetch_base_product_via_api(basis: str):
+    lang_id = get_english_language_id()
+    headers = dict(SW_HEADERS)
+    if lang_id:
+        headers["sw-language-id"] = lang_id
+
+    payload = {
+        "filter": [{"type": "equals", "field": "productNumber", "value": basis}],
+        "associations": {
+            "seoUrls": {},
+            "cover": {"associations": {"media": {}}},
+        },
+        "limit": 1,
+    }
+    try:
+        resp = requests.post(SW_API_URL, json=payload, headers=headers, timeout=15)
+        resp.raise_for_status()
+        elements = resp.json().get("elements", [])
+        return elements[0] if elements else None
+    except Exception:
+        return None
+
+
+def product_api_price(el: dict) -> float:
+    cp = el.get("calculatedPrice") or {}
+    rp = cp.get("referencePrice")
+    if rp and rp.get("price"):
+        return round(rp["price"], 2)
+
+    raw_price = cp.get("unitPrice") or 0
+    custom_fields = el.get("customFields") or {}
+    if raw_price and custom_fields.get("custom_sold_by_meter_active"):
+        return round(raw_price * 100, 2)
+
+    purchase_unit = el.get("purchaseUnit") or cp.get("purchaseUnit") or 1
+    reference_unit = el.get("referenceUnit") or cp.get("referenceUnit") or 1
+    if raw_price and purchase_unit:
+        return round(raw_price / purchase_unit * reference_unit, 2)
+    return round(raw_price, 2)
 
 
 def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
@@ -333,6 +360,18 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
 
     material_type = guess_type(title)
     colors = fetch_all_colors_via_api(basis, material_type)
+    if not colors:
+        base_product = fetch_base_product_via_api(basis)
+        if base_product:
+            image_url = (((base_product.get("cover") or {}).get("media") or {}).get("url") or "").split("?")[0]
+            unit_price = product_api_price(base_product)
+            colors = [{
+                "name": "Default",
+                "url": url,
+                "image": image_url,
+                "availability": "In stock" if (base_product.get("availableStock") or 0) > 0 else "Out of stock",
+                "price_per_unit": unit_price,
+            }]
 
     # Price: show a range when variants have different prices.
     price = ""
@@ -933,40 +972,4 @@ def delete_template(name: str):
             spreadsheetId=SPREADSHEET_ID,
             range="Templates!A:A"
         ).execute()
-        existing = result.get("values", [])
-        row_index = None
-        for i, row in enumerate(existing):
-            if row and row[0] == name:
-                row_index = i
-                break
-
-        if row_index is None:
-            raise HTTPException(status_code=404, detail="Template not found")
-
-        # Get sheet id for Templates
-        meta = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
-        sheet_id = None
-        for s in meta.get("sheets", []):
-            if s["properties"]["title"] == "Templates":
-                sheet_id = s["properties"]["sheetId"]
-                break
-
-        service.spreadsheets().batchUpdate(
-            spreadsheetId=SPREADSHEET_ID,
-            body={"requests": [{
-                "deleteDimension": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "dimension": "ROWS",
-                        "startIndex": row_index,
-                        "endIndex": row_index + 1
-                    }
-                }
-            }]}
-        ).execute()
-
-        return {"status": "ok"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+        existing = result.get("values", []
