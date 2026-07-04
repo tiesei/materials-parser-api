@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 import re
 import os
 import json
+from datetime import date
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
@@ -62,7 +63,7 @@ class SaleRequest(BaseModel):
     total: float = 0
 
 
-# ── GOOGLE SHEETS ─────────────────────────────────────────────────────────────
+# â”€â”€ GOOGLE SHEETS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def get_sheets_service():
     creds_json = os.environ.get("GOOGLE_CREDENTIALS", "")
@@ -79,63 +80,169 @@ def ensure_counts_sheets(service):
     if not spreadsheet_id:
         raise HTTPException(status_code=500, detail="Counts spreadsheet not configured")
     sheet = service.spreadsheets()
+
     meta = sheet.get(spreadsheetId=spreadsheet_id).execute()
-    sheet_names = [s["properties"]["title"] for s in meta.get("sheets", [])]
+    sheets_by_name = {
+        s["properties"]["title"]: s["properties"]
+        for s in meta.get("sheets", [])
+    }
 
     requests = []
-    if "Sales" not in sheet_names:
-        requests.append({"addSheet": {"properties": {"title": "Sales"}}})
-    if "Monthly Summary" not in sheet_names:
-        requests.append({"addSheet": {"properties": {"title": "Monthly Summary"}}})
+    if "Transactions" not in sheets_by_name:
+        requests.append({"addSheet": {"properties": {"title": "Transactions"}}})
+    if "Summary" not in sheets_by_name:
+        if "Monthly Summary" in sheets_by_name:
+            requests.append({
+                "updateSheetProperties": {
+                    "properties": {
+                        "sheetId": sheets_by_name["Monthly Summary"]["sheetId"],
+                        "title": "Summary"
+                    },
+                    "fields": "title"
+                }
+            })
+        else:
+            requests.append({"addSheet": {"properties": {"title": "Summary"}}})
     if requests:
         sheet.batchUpdate(spreadsheetId=spreadsheet_id, body={"requests": requests}).execute()
 
-    sales_headers = [["date", "year", "month", "product", "qty", "materials €", "labour €", "total €"]]
-    summary_headers = [[
+    meta = sheet.get(spreadsheetId=spreadsheet_id).execute()
+    sheets_by_name = {
+        s["properties"]["title"]: s["properties"]
+        for s in meta.get("sheets", [])
+    }
+
+    tx_headers = [["date", "type", "item", "qty", "materials €", "labour €", "total €"]]
+    summary_rows = [[
         "year", "month", "sales total €", "materials covered €",
-        "labour earned €", "manual expenses €", "profit €"
+        "labour earned €", "expenses €", "profit €"
     ]]
 
-    sales_existing = sheet.values().get(
-        spreadsheetId=spreadsheet_id,
-        range="Sales!A1:H1"
-    ).execute().get("values", [])
-    if not sales_existing:
-        sheet.values().update(
+    def read_values(tab, range_suffix):
+        if tab not in sheets_by_name:
+            return []
+        return sheet.values().get(
             spreadsheetId=spreadsheet_id,
-            range="Sales!A1:H1",
-            valueInputOption="RAW",
-            body={"values": sales_headers}
-        ).execute()
+            range=f"{tab}!{range_suffix}"
+        ).execute().get("values", [])
 
-    summary_existing = sheet.values().get(
+    def padded(row, size):
+        return (row + [""] * size)[:size]
+
+    normalized = []
+    seen = set()
+
+    for row in read_values("Transactions", "A2:G"):
+        date_v, type_v, item, qty, materials, labour, total = padded(row, 7)
+        if not date_v and not type_v and not item:
+            continue
+        tx_row = [date_v, type_v or "sale", item, qty, materials, labour, total]
+        key = tuple(str(v) for v in tx_row)
+        if key not in seen:
+            normalized.append(tx_row)
+            seen.add(key)
+
+    for row in read_values("Sales", "A2:H"):
+        date_v, _year, _month, product, qty, materials, labour, total = padded(row, 8)
+        if not date_v and not product:
+            continue
+        tx_row = [date_v, "sale", product, qty, materials, labour, total]
+        key = tuple(str(v) for v in tx_row)
+        if key not in seen:
+            normalized.append(tx_row)
+            seen.add(key)
+
+    sheet.values().clear(
         spreadsheetId=spreadsheet_id,
-        range="Monthly Summary!A1:G1"
-    ).execute().get("values", [])
-    if not summary_existing:
-        rows = summary_headers
-        for year in range(2026, 2029):
-            for month_num in range(1, 13):
-                row_num = len(rows) + 1
-                month = f"{month_num:02d}"
-                rows.append([
-                    year,
-                    month,
-                    f'=SUMIFS(Sales!$H:$H,Sales!$B:$B,$A{row_num},Sales!$C:$C,$B{row_num})',
-                    f'=SUMIFS(Sales!$F:$F,Sales!$B:$B,$A{row_num},Sales!$C:$C,$B{row_num})',
-                    f'=SUMIFS(Sales!$G:$G,Sales!$B:$B,$A{row_num},Sales!$C:$C,$B{row_num})',
-                    "",
-                    f'=$E{row_num}-IF($F{row_num}="",0,$F{row_num})',
-                ])
-        sheet.values().update(
-            spreadsheetId=spreadsheet_id,
-            range="Monthly Summary!A1:G37",
-            valueInputOption="USER_ENTERED",
-            body={"values": rows}
-        ).execute()
+        range="Transactions!A:Z"
+    ).execute()
+    sheet.values().update(
+        spreadsheetId=spreadsheet_id,
+        range="Transactions!A1",
+        valueInputOption="USER_ENTERED",
+        body={"values": tx_headers + normalized}
+    ).execute()
+
+    current_year = date.today().year
+    for year in range(current_year, current_year + 3):
+        for month_num in range(1, 13):
+            row_num = len(summary_rows) + 1
+            first_day = f"DATE($A{row_num},$B{row_num},1)"
+            next_month = f"EDATE({first_day},1)"
+            summary_rows.append([
+                year,
+                month_num,
+                f'=SUMIFS(Transactions!$G:$G,Transactions!$B:$B,"sale",Transactions!$A:$A,">="&{first_day},Transactions!$A:$A,"<"&{next_month})',
+                f'=SUMIFS(Transactions!$E:$E,Transactions!$B:$B,"sale",Transactions!$A:$A,">="&{first_day},Transactions!$A:$A,"<"&{next_month})',
+                f'=SUMIFS(Transactions!$F:$F,Transactions!$B:$B,"sale",Transactions!$A:$A,">="&{first_day},Transactions!$A:$A,"<"&{next_month})+SUMIFS(Transactions!$G:$G,Transactions!$B:$B,"manual income",Transactions!$A:$A,">="&{first_day},Transactions!$A:$A,"<"&{next_month})',
+                f'=ABS(SUMIFS(Transactions!$G:$G,Transactions!$B:$B,"manual expense",Transactions!$A:$A,">="&{first_day},Transactions!$A:$A,"<"&{next_month})+SUMIFS(Transactions!$G:$G,Transactions!$B:$B,"rent",Transactions!$A:$A,">="&{first_day},Transactions!$A:$A,"<"&{next_month}))',
+                f'=$E{row_num}-$F{row_num}',
+            ])
+
+    sheet.values().clear(
+        spreadsheetId=spreadsheet_id,
+        range="Summary!A:Z"
+    ).execute()
+    sheet.values().update(
+        spreadsheetId=spreadsheet_id,
+        range="Summary!A1",
+        valueInputOption="USER_ENTERED",
+        body={"values": summary_rows}
+    ).execute()
+
+    meta = sheet.get(spreadsheetId=spreadsheet_id).execute()
+    sheets_by_name = {
+        s["properties"]["title"]: s["properties"]
+        for s in meta.get("sheets", [])
+    }
+    tx_id = sheets_by_name["Transactions"]["sheetId"]
+    summary_id = sheets_by_name["Summary"]["sheetId"]
+    requests = []
+
+    if "Sales" in sheets_by_name:
+        requests.append({"deleteSheet": {"sheetId": sheets_by_name["Sales"]["sheetId"]}})
+    if "Monthly Summary" in sheets_by_name:
+        requests.append({"deleteSheet": {"sheetId": sheets_by_name["Monthly Summary"]["sheetId"]}})
+
+    requests.extend([
+        {"updateSheetProperties": {"properties": {"sheetId": tx_id, "gridProperties": {"frozenRowCount": 1}}, "fields": "gridProperties.frozenRowCount"}},
+        {"updateSheetProperties": {"properties": {"sheetId": summary_id, "gridProperties": {"frozenRowCount": 1}}, "fields": "gridProperties.frozenRowCount"}},
+        {"setBasicFilter": {"filter": {"range": {"sheetId": tx_id, "startRowIndex": 0, "endRowIndex": 1000, "startColumnIndex": 0, "endColumnIndex": 7}}}},
+        {"setBasicFilter": {"filter": {"range": {"sheetId": summary_id, "startRowIndex": 0, "endRowIndex": 37, "startColumnIndex": 0, "endColumnIndex": 7}}}},
+        {"repeatCell": {
+            "range": {"sheetId": tx_id, "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 0, "endColumnIndex": 1},
+            "cell": {"userEnteredFormat": {"numberFormat": {"type": "DATE", "pattern": "dd/mm/yyyy"}}},
+            "fields": "userEnteredFormat.numberFormat"
+        }},
+        {"repeatCell": {
+            "range": {"sheetId": tx_id, "startRowIndex": 1, "endRowIndex": 1000, "startColumnIndex": 1, "endColumnIndex": 2},
+            "cell": {"dataValidation": {"condition": {"type": "ONE_OF_LIST", "values": [
+                {"userEnteredValue": "sale"},
+                {"userEnteredValue": "manual income"},
+                {"userEnteredValue": "manual expense"},
+                {"userEnteredValue": "rent"}
+            ]}, "showCustomUi": True, "strict": True}},
+            "fields": "dataValidation"
+        }},
+        {"updateDimensionProperties": {
+            "range": {"sheetId": tx_id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 7},
+            "properties": {"pixelSize": 130},
+            "fields": "pixelSize"
+        }},
+        {"updateDimensionProperties": {
+            "range": {"sheetId": summary_id, "dimension": "COLUMNS", "startIndex": 0, "endIndex": 7},
+            "properties": {"pixelSize": 135},
+            "fields": "pixelSize"
+        }},
+        {"updateDimensionProperties": {
+            "range": {"sheetId": summary_id, "dimension": "ROWS", "startIndex": 13, "endIndex": 37},
+            "properties": {"hiddenByUser": True},
+            "fields": "hiddenByUser"
+        }},
+    ])
+    sheet.batchUpdate(spreadsheetId=spreadsheet_id, body={"requests": requests}).execute()
 
     return sheet
-
 
 def save_to_sheets(data: dict):
     COL_HEADERS = ["type", "title", "description", "notes", "colors", "variants", "weight", "price", "url"]
@@ -147,7 +254,7 @@ def save_to_sheets(data: dict):
             data.get("type", ""),
             data.get("title", ""),
             data.get("description", ""),
-            "",  # notes — col D, user fills manually
+            "",  # notes â€” col D, user fills manually
             json.dumps(data.get("colors", []), ensure_ascii=False),
             json.dumps(data.get("variants", []), ensure_ascii=False),
             data.get("weight", ""),
@@ -202,7 +309,7 @@ def save_to_sheets(data: dict):
         raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
 
 
-# ── HELPERS ───────────────────────────────────────────────────────────────────
+# â”€â”€ HELPERS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def guess_type(title: str) -> str:
     t = title.lower()
@@ -266,7 +373,7 @@ def extract_price_value(text: str, require_unit: bool = False):
     return None
 
 
-# ── EXTREMTEXTIL ──────────────────────────────────────────────────────────────
+# â”€â”€ EXTREMTEXTIL â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def get_english_language_id() -> str:
     global _en_language_id
@@ -347,7 +454,7 @@ def fetch_all_colors_via_api(basis: str, material_type: str = "Fabric") -> list:
         # Availability
         availability = "In stock" if (el.get("availableStock") or 0) > 0 else "Out of stock"
 
-        # Price — use referencePrice (per meter/sqm/piece as shown on site) if available
+        # Price â€” use referencePrice (per meter/sqm/piece as shown on site) if available
         unit_price = product_api_price(el)
 
         colors.append({
@@ -469,9 +576,9 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
                 colors[0]["price_per_unit"] = price_float
 
     if not price:
-        # Try €X.XX/meter pattern first
+        # Try â‚¬X.XX/meter pattern first
         full_text = soup.get_text(" ", strip=True)
-        m = re.search(r'€\s*([\d]+[,\.]?[\d]*)\s*/\s*(?:meter|sqm|piece|m\b)', full_text)
+        m = re.search(r'â‚¬\s*([\d]+[,\.]?[\d]*)\s*/\s*(?:meter|sqm|piece|m\b)', full_text)
         if m:
             price_float = round(float(m.group(1).replace(",", ".")), 2)
             price = f"{price_float:.2f} EUR".replace(".", ",")
@@ -503,12 +610,12 @@ def parse_extremtextil(url: str, soup: BeautifulSoup) -> dict:
     }
 
 
-# ── ADVENTUREXPERT ────────────────────────────────────────────────────────────
+# â”€â”€ ADVENTUREXPERT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
     title = (soup.title.text.strip()
              .replace(" - Adventurexpert", "")
-             .replace(" – Adventurexpert", "")
+             .replace(" â€“ Adventurexpert", "")
              if soup.title else url)
 
     price = ""
@@ -518,7 +625,7 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
         if price_float:
             price = format_price_eur(price_float)
     if not price and price_tag:
-        m = re.search(r'[\d,\.]+\s*€', price_tag.get_text(strip=True))
+        m = re.search(r'[\d,\.]+\s*â‚¬', price_tag.get_text(strip=True))
         if m:
             price = m.group().replace("\xa0", "").strip()
 
@@ -598,7 +705,7 @@ def parse_adventurexpert(url: str, soup: BeautifulSoup) -> dict:
     }
 
 
-# ── ROUTER ────────────────────────────────────────────────────────────────────
+# â”€â”€ ROUTER â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def parse_page(url: str) -> dict:
     if not any(domain in url for domain in ALLOWED_DOMAINS):
@@ -617,7 +724,7 @@ def parse_page(url: str) -> dict:
         return parse_adventurexpert(url, soup)
 
 
-# ── ENDPOINTS ─────────────────────────────────────────────────────────────────
+# â”€â”€ ENDPOINTS â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/")
 def root():
@@ -777,7 +884,7 @@ def save_products(req: ProductsUpdateRequest):
         raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
 
 
-# ── FEATURES ──────────────────────────────────────────────────────────────────
+# â”€â”€ FEATURES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/features")
 def get_features():
@@ -928,7 +1035,7 @@ def update_note(req: UpdateNoteRequest):
         raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
 
 
-# ── TEMPLATES ─────────────────────────────────────────────────────────────────
+# â”€â”€ TEMPLATES â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 class TemplateRequest(BaseModel):
     name: str = ""
@@ -949,8 +1056,7 @@ def save_sale(req: SaleRequest):
         sheet = ensure_counts_sheets(service)
         row_data = [[
             req.date,
-            req.year,
-            req.month,
+            "sale",
             req.product,
             req.qty,
             round(req.materials, 2),
@@ -959,11 +1065,23 @@ def save_sale(req: SaleRequest):
         ]]
         sheet.values().append(
             spreadsheetId=COUNTS_SPREADSHEET_ID,
-            range="Sales!A:H",
+            range="Transactions!A:G",
             valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
             body={"values": row_data}
         ).execute()
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
+
+
+@app.get("/counts/setup")
+def setup_counts():
+    try:
+        service = get_sheets_service()
+        ensure_counts_sheets(service)
         return {"status": "ok"}
     except HTTPException:
         raise
@@ -1029,7 +1147,7 @@ def save_template(req: TemplateRequest):
         state = req.dict()
         name = req.name or req.productName or "Template"
 
-        # Check if name already exists → update
+        # Check if name already exists â†’ update
         result = sheet.values().get(
             spreadsheetId=SPREADSHEET_ID,
             range="Templates!A:A"
