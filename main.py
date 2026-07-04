@@ -24,6 +24,7 @@ FETCH_HEADERS = {
 
 ALLOWED_DOMAINS = ["extremtextil.de", "adventurexpert.com"]
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
+COUNTS_SPREADSHEET_ID = os.environ.get("COUNTS_SPREADSHEET_ID", "")
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 SW_ACCESS_KEY = "SWSCRXNCU2Y4AHB0DZZGRVNFMG"
@@ -50,6 +51,17 @@ class ProductsUpdateRequest(BaseModel):
     headers: list = []
 
 
+class SaleRequest(BaseModel):
+    date: str
+    year: int
+    month: str
+    product: str
+    qty: int = 1
+    materials: float = 0
+    labour: float = 0
+    total: float = 0
+
+
 # ── GOOGLE SHEETS ─────────────────────────────────────────────────────────────
 
 def get_sheets_service():
@@ -60,6 +72,69 @@ def get_sheets_service():
         json.loads(creds_json), scopes=SCOPES
     )
     return build("sheets", "v4", credentials=creds)
+
+
+def ensure_counts_sheets(service):
+    spreadsheet_id = COUNTS_SPREADSHEET_ID
+    if not spreadsheet_id:
+        raise HTTPException(status_code=500, detail="Counts spreadsheet not configured")
+    sheet = service.spreadsheets()
+    meta = sheet.get(spreadsheetId=spreadsheet_id).execute()
+    sheet_names = [s["properties"]["title"] for s in meta.get("sheets", [])]
+
+    requests = []
+    if "Sales" not in sheet_names:
+        requests.append({"addSheet": {"properties": {"title": "Sales"}}})
+    if "Monthly Summary" not in sheet_names:
+        requests.append({"addSheet": {"properties": {"title": "Monthly Summary"}}})
+    if requests:
+        sheet.batchUpdate(spreadsheetId=spreadsheet_id, body={"requests": requests}).execute()
+
+    sales_headers = [["date", "year", "month", "product", "qty", "materials €", "labour €", "total €"]]
+    summary_headers = [[
+        "year", "month", "sales total €", "materials covered €",
+        "labour earned €", "manual expenses €", "profit €"
+    ]]
+
+    sales_existing = sheet.values().get(
+        spreadsheetId=spreadsheet_id,
+        range="Sales!A1:H1"
+    ).execute().get("values", [])
+    if not sales_existing:
+        sheet.values().update(
+            spreadsheetId=spreadsheet_id,
+            range="Sales!A1:H1",
+            valueInputOption="RAW",
+            body={"values": sales_headers}
+        ).execute()
+
+    summary_existing = sheet.values().get(
+        spreadsheetId=spreadsheet_id,
+        range="Monthly Summary!A1:G1"
+    ).execute().get("values", [])
+    if not summary_existing:
+        rows = summary_headers
+        for year in range(2026, 2029):
+            for month_num in range(1, 13):
+                row_num = len(rows) + 1
+                month = f"{month_num:02d}"
+                rows.append([
+                    year,
+                    month,
+                    f'=SUMIFS(Sales!$H:$H,Sales!$B:$B,$A{row_num},Sales!$C:$C,$B{row_num})',
+                    f'=SUMIFS(Sales!$F:$F,Sales!$B:$B,$A{row_num},Sales!$C:$C,$B{row_num})',
+                    f'=SUMIFS(Sales!$G:$G,Sales!$B:$B,$A{row_num},Sales!$C:$C,$B{row_num})',
+                    "",
+                    f'=$E{row_num}-IF($F{row_num}="",0,$F{row_num})',
+                ])
+        sheet.values().update(
+            spreadsheetId=spreadsheet_id,
+            range="Monthly Summary!A1:G37",
+            valueInputOption="USER_ENTERED",
+            body={"values": rows}
+        ).execute()
+
+    return sheet
 
 
 def save_to_sheets(data: dict):
@@ -865,6 +940,35 @@ class TemplateRequest(BaseModel):
 
     class Config:
         extra = "allow"
+
+
+@app.post("/sales")
+def save_sale(req: SaleRequest):
+    try:
+        service = get_sheets_service()
+        sheet = ensure_counts_sheets(service)
+        row_data = [[
+            req.date,
+            req.year,
+            req.month,
+            req.product,
+            req.qty,
+            round(req.materials, 2),
+            round(req.labour, 2),
+            round(req.total, 2),
+        ]]
+        sheet.values().append(
+            spreadsheetId=COUNTS_SPREADSHEET_ID,
+            range="Sales!A:H",
+            valueInputOption="USER_ENTERED",
+            insertDataOption="INSERT_ROWS",
+            body={"values": row_data}
+        ).execute()
+        return {"status": "ok"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Sheets error: {e}")
 
 
 def get_templates_sheet(service):
